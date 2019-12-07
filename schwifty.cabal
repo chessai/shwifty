@@ -1,0 +1,42 @@
+cabal-version: 2.2
+name:
+  schwifty
+version:
+  0.1
+-- synopsis:
+-- description:
+-- bug-reports:
+license:
+  MIT
+license-file:
+  LICENSE
+author:
+  chessai
+maintainer:
+  chessai <chessai1996@gmail.com>
+copyright:
+  Copyright (c) 2019, chessai
+-- category:
+--   Text
+build-type:
+  Simple
+extra-source-files:
+  CHANGELOG.md
+  README.md
+
+library
+  hs-source-dirs:
+    src
+  exposed-modules:
+    Schwifty
+  build-depends:
+    , base >= 4.11 && < 4.14
+    , containers >= 0.5 && < 0.7
+    , lens >= 4.18 && < 4.19
+    , template-haskell >= 2.11 && < 2.17
+    , text >= 1.2 && < 1.3
+    , th-abstraction >= 0.3 && < 0.4
+    , unordered-containers >= 0.2 && < 0.3
+    , vector >= 0.12 && < 0.13
+  default-language:
+    Haskell2010
