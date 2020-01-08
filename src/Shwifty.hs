@@ -26,7 +26,7 @@
   -fno-warn-unused-top-binds
 #-}
 
-module Schwifty
+module Shwifty
   (
   ) where
 

@@ -1,6 +1,6 @@
 cabal-version: 2.2
 name:
-  schwifty
+  shwifty
 version:
   0.1
 -- synopsis:
@@ -28,7 +28,7 @@ library
   hs-source-dirs:
     src
   exposed-modules:
-    Schwifty
+    Shwifty
   build-depends:
     , base >= 4.11 && < 4.14
     , containers >= 0.5 && < 0.7
