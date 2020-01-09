@@ -36,12 +36,12 @@ import Control.Monad.Except
 import Control.Monad.Reader
 import Data.Proxy (Proxy(..))
 import Control.Monad (forM)
-import Data.Maybe (mapMaybe)
+import Data.Maybe (mapMaybe,fromMaybe)
 import Data.Functor.Identity (Identity(..))
 import Control.Lens
 import Control.Monad.IO.Class (liftIO)
 import Data.Bifunctor (bimap)
-import Data.Foldable (foldlM, foldr')
+import Data.Foldable
 import Data.Function ((&))
 import Data.HashMap.Strict (HashMap)
 import Data.Int
@@ -55,6 +55,7 @@ import Language.Haskell.TH hiding (stringE)
 import Language.Haskell.TH.Datatype
 import Prelude hiding (Enum(..))
 import qualified Data.HashMap.Strict as HM
+import qualified Data.List as L
 import qualified Data.Map.Strict as M
 import qualified Data.Text as TS
 import qualified Data.Text.Lazy as TL
@@ -88,14 +89,25 @@ data Ty
   | BigSInt32 | BigSInt64 -- big integers
   | Poly String -- polymorphic type variable
 
+-- | Options that specify how to
+--   encode your 'SwiftData' to a swift type.
+--
+--   Options can be set using record syntax on
+--   'defaultOptions' with the fields below.
 data Options = Options
-  { optionalTruncate :: Bool
+  { fieldLabelModifier :: String -> String
+    -- ^ Function applied to field labels.
+    --   Handy for removing common record prefixes,
+    --   for example. The default ('id') makes no
+    --   changes.
+  , optionalTruncate :: Bool
     -- ^ Whether or not to truncate Optional types.
     --   Normally, an Optional ('Maybe') is encoded as "Optional<A>",
     --   but in Swift it is valid to have "A?" (\'?\' appended to the
     --   type). The default ('False') is the verbose option.
   , indent :: Int
-    -- ^ number of spaces to indent
+    -- ^ Number of spaces to indent field names
+    --   and cases. The default is 2.
   }
 
 class SwiftTy a where
@@ -329,13 +341,43 @@ getShwifty name = do
     , datatypeCons = cons
     } -> do {
        -- preliminary checks
-    ; isDatatypeOrNewtype info
+    -- ; isDatatypeOrNewtype info
     ; mapM_ noConstructorVars cons
-    ; mapM_ checkKind instTys
-    ; noVoidTypes info
-
-    ; pure []
+    -- ; mapM_ checkKind instTys
+    -- ; noVoidTypes info
+    ; (instanceCtx, instanceType)
+        <- buildTypeInstance parentName instTys variant
+    ; (:[]) <$> instanceD
+        (pure instanceCtx)
+        (pure instanceType)
+        (methodDecs parentName instTys cons)
     }
+  where
+    methodDecs :: Name -> [Type] -> [ConstructorInfo] -> [Q Dec]
+    methodDecs parentName instTys cons = (:[])
+      $ funD 'toSwiftData
+          [ clause
+              []
+              (normalB $ consToSwiftData instTys cons)
+              []
+          ]
+
+consToSwiftData :: ()
+  => [Type]
+  -> [ConstructorInfo]
+  -> Q Exp
+consToSwiftData _ [] = fail "Cannot get shwifty with The Void!"
+consToSwiftData instTys cons = do
+  value <- newName "value"
+  --let tvMap = M.fromList $ zip instTys
+  lamE [varP value] (caseE (varE value) matches)
+  where
+    matches :: [Q Match]
+    matches = case cons of
+      [con] ->
+        [
+        ]
+      _ -> []
 
 buildTypeInstance :: ()
   => Name
@@ -369,7 +411,65 @@ buildTypeInstance tyConName varTysOrig variant = do
   let varTysExpSubst :: [Type]
       varTysExpSubst = map (substNamesWithKindStar kindVarNames) varTysExp
 
-  pure undefined
+  let preds :: [Maybe Pred]
+      kvNames :: [[Name]]
+      kvNames' :: [Name]
+      -- Derive instance constraints (and any
+      -- kind variables which are specialised to
+      -- * in those constraints)
+      (preds, kvNames) = unzip $ map deriveConstraint varTysExpSubst
+      kvNames' = concat kvNames
+
+      --varTysExpSubst' :: [Type]
+      --varTysExpSubst' = map (substNamesWithKindStar kvNames') varTysExpSubst
+
+      -- We now sub all of the specialised-to-* kind
+      -- variable names with *, but in the original types,
+      -- not the synonym-expanded types. The reason we
+      -- do this is superficial: we want the derived
+      -- instance to resemble the datatype written in
+      -- source code as closely as possible. For example,
+      --
+      --   data family Fam a
+      --   newtype instance Fam String = Fam String
+      --
+      -- We'd want to generate the instance:
+      --
+      --   instance C (Fam String)
+      --
+      -- Not:
+      --
+      --   instance C (Fam [Char])
+      varTysOrigSubst :: [Type]
+      varTysOrigSubst =
+        map (substNamesWithKindStar (kindVarNames `L.union` kvNames')) $ varTysOrig
+
+      isDataFamily :: Bool
+      isDataFamily = case variant of
+        Datatype -> False
+        Newtype -> False
+        DataInstance -> True
+        NewtypeInstance -> True
+
+      varTysOrigSubst' :: [Type]
+      varTysOrigSubst' = if isDataFamily
+        then varTysOrigSubst
+        else map unSigT varTysOrigSubst
+
+      instanceCxt :: Cxt
+      instanceCxt = catMaybes preds
+
+      instanceType :: Type
+      instanceType = AppT (ConT ''ToSwiftData)
+        $ applyTyCon tyConName varTysOrigSubst'
+
+  pure (instanceCxt, instanceType)
+
+-- peel off a kind signature from a Type, if it has one
+unSigT :: Type -> Type
+unSigT = \case
+  SigT t _ -> t
+  t -> t
 
 substNamesWithKindStar :: [Name] -> Type -> Type
 substNamesWithKindStar ns t = foldr' (`substNameWithKind` starK) t ns
@@ -383,7 +483,7 @@ data KindStatus
   | NotKindStar
     -- ^ any other kind
   | IsKindVar Name
-    -- ^ actually a kind variable
+    -- ^ is actually a kind variable
 
 canRealiseKindStar :: Type -> KindStatus
 canRealiseKindStar = \case
@@ -391,6 +491,52 @@ canRealiseKindStar = \case
   SigT _ StarT -> KindStar
   SigT _ (VarT k) -> IsKindVar k
   _ -> NotKindStar
+
+hasKindStar :: Type -> Bool
+hasKindStar = \case
+  VarT {} -> True
+  SigT _ StarT -> True
+  _ -> False
+
+-- TODO: type variables with no bearing on runtime rep
+-- should not get constraints. note that
+-- 'no bearing on runtime rep' is different than
+-- 'phantom', since a user could give a stronger
+-- RoleAnnotation to a type variable but it would
+-- still have no bearing on runtime rep.
+deriveConstraint :: Type -> (Maybe Pred, [Name])
+deriveConstraint t
+  | not (isTyVar t) = (Nothing, [])
+  | hasKindStar t = (Just (applyCon ''SwiftTy tName), [])
+  | otherwise = (Nothing, [])
+  where
+    tName :: Name
+    tName = varTToName t
+
+-- is the given type a type variable?
+isTyVar :: Type -> Bool
+isTyVar = \case
+  VarT _ -> True
+  SigT t _ -> isTyVar t
+  _ -> False
+
+applyCon :: Name -> Name -> Pred
+applyCon con t = AppT (ConT con) (VarT t)
+
+-- fully applies a type constructor to its
+-- type variables
+applyTyCon :: Name -> [Type] -> Type
+applyTyCon = foldl' AppT . ConT
+
+varTToNameMaybe :: Type -> Maybe Name
+varTToNameMaybe = \case
+  VarT n -> Just n
+  SigT t _ -> varTToNameMaybe t
+  _ -> Nothing
+
+varTToName :: Type -> Name
+varTToName = fromMaybe (error "Not a type variable!")
+  . varTToNameMaybe
 
 --data Struct = Struct
 --  { name :: String
@@ -426,19 +572,6 @@ data ConstructorInfo
 
 class ToSwiftData a where
   toSwiftData :: Proxy a -> SwiftData
-
-{-
-  case datatypeCons of
-    [] -> fail $ "Cannot get schwifty with the void."
-      ++ " You are trying to get schwifty with an empty type."
-    [ConstructorInfo{..}] -> do
-      case constructorVariant of
-        NormalConstructor -> fail "NormalConstructor Not yet supported"
-        RecordConstructor names -> do
-          let fs = zip names constructorFields
-          pure ()
-    _ -> pure ()
--}
 
 getTyVars :: DatatypeInfo -> [Name]
 getTyVars DatatypeInfo{..} = id

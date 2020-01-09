@@ -1,11 +1,13 @@
 {-# language TemplateHaskell #-}
-{-# language GADTs, DataKinds, PolyKinds, KindSignatures #-}
+{-# language EmptyCase, GADTs, DataKinds, PolyKinds, KindSignatures #-}
+
+{-# options_ghc -ddump-splices #-}
 
 module Test where
 
 import Shwifty
 
-data M (k :: Bool) = MkM
+data M (a :: k) = MkM
 getShwifty ''M
 
 --data M m a = MkM (m a)
