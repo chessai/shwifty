@@ -27,16 +27,21 @@
 #-}
 
 module Shwifty
-  (
+  ( getShwifty
   ) where
 
 #include "MachDeps.h"
 
+import Control.Monad.Except
+import Control.Monad.Reader
 import Data.Proxy (Proxy(..))
 import Control.Monad (forM)
+import Data.Maybe (mapMaybe)
 import Data.Functor.Identity (Identity(..))
 import Control.Lens
+import Control.Monad.IO.Class (liftIO)
 import Data.Bifunctor (bimap)
+import Data.Foldable (foldlM, foldr')
 import Data.Function ((&))
 import Data.HashMap.Strict (HashMap)
 import Data.Int
@@ -93,57 +98,73 @@ data Options = Options
     -- ^ number of spaces to indent
   }
 
-class Swift a where
-  toSwift :: Proxy a -> Ty
+class SwiftTy a where
+  toSwiftTy :: Proxy a -> Ty
 
-instance Swift () where
-  toSwift = const Unit
+instance SwiftTy () where
+  toSwiftTy = const Unit
 
-instance forall a. Swift a => Swift (Maybe a) where
-  toSwift = const (Optional (toSwift (Proxy @a)))
+instance forall a. SwiftTy a => SwiftTy (Maybe a) where
+  toSwiftTy = const (Optional (toSwiftTy (Proxy @a)))
 
 -- | N.B. we flip the ordering because in Swift they are flipped
 --   Should we though?
-instance forall a b. (Swift a, Swift b) => Swift (Either a b) where
-  toSwift = const (Result (toSwift (Proxy @b)) (toSwift (Proxy @a)))
+instance forall a b. (SwiftTy a, SwiftTy b) => SwiftTy (Either a b) where
+  toSwiftTy = const (Result (toSwiftTy (Proxy @b)) (toSwiftTy (Proxy @a)))
 
-instance Swift Integer where
-  toSwift = const
+instance SwiftTy Integer where
+  toSwiftTy = const
 #if WORD_SIZE_IN_BITS == 32
     BigSInt32
 #else
     BigSInt64
 #endif
 
-instance Swift Int   where toSwift = const I
-instance Swift Int8  where toSwift = const I8
-instance Swift Int16 where toSwift = const I16
-instance Swift Int32 where toSwift = const I32
-instance Swift Int64 where toSwift = const I64
+instance SwiftTy Int   where toSwiftTy = const I
+instance SwiftTy Int8  where toSwiftTy = const I8
+instance SwiftTy Int16 where toSwiftTy = const I16
+instance SwiftTy Int32 where toSwiftTy = const I32
+instance SwiftTy Int64 where toSwiftTy = const I64
 
-instance Swift Word   where toSwift = const U
-instance Swift Word8  where toSwift = const U8
-instance Swift Word16 where toSwift = const U16
-instance Swift Word32 where toSwift = const U32
-instance Swift Word64 where toSwift = const U64
+instance SwiftTy Word   where toSwiftTy = const U
+instance SwiftTy Word8  where toSwiftTy = const U8
+instance SwiftTy Word16 where toSwiftTy = const U16
+instance SwiftTy Word32 where toSwiftTy = const U32
+instance SwiftTy Word64 where toSwiftTy = const U64
 
-instance Swift Float  where toSwift = const F32
-instance Swift Double where toSwift = const F64
+instance SwiftTy Float  where toSwiftTy = const F32
+instance SwiftTy Double where toSwiftTy = const F64
 
-instance Swift Char where toSwift = const Character
+instance SwiftTy Char where toSwiftTy = const Character
 
-instance {-# overlappable #-} forall a. Swift a => Swift [a] where
-  toSwift = const (Array (toSwift (Proxy @a)))
+instance {-# overlappable #-} forall a. SwiftTy a => SwiftTy [a] where
+  toSwiftTy = const (Array (toSwiftTy (Proxy @a)))
 
-instance {-# overlapping #-} Swift [Char] where toSwift = const Str
-instance Swift TL.Text where toSwift = const Str
-instance Swift TS.Text where toSwift = const Str
+instance {-# overlapping #-} SwiftTy [Char] where toSwiftTy = const Str
+instance SwiftTy TL.Text where toSwiftTy = const Str
+instance SwiftTy TS.Text where toSwiftTy = const Str
 
-instance forall a b. (Swift a, Swift b) => Swift ((,) a b) where
-  toSwift = const (Tuple2 (toSwift (Proxy @a)) (toSwift (Proxy @b)))
+instance forall a b. (SwiftTy a, SwiftTy b) => SwiftTy ((,) a b) where
+  toSwiftTy = const (Tuple2 (toSwiftTy (Proxy @a)) (toSwiftTy (Proxy @b)))
 
-instance forall a b c. (Swift a, Swift b, Swift c) => Swift ((,,) a b c) where
-  toSwift = const (Tuple3 (toSwift (Proxy @a)) (toSwift (Proxy @b)) (toSwift (Proxy @c)))
+instance forall a b c. (SwiftTy a, SwiftTy b, SwiftTy c) => SwiftTy ((,,) a b c) where
+  toSwiftTy = const (Tuple3 (toSwiftTy (Proxy @a)) (toSwiftTy (Proxy @b)) (toSwiftTy (Proxy @c)))
+
+data SwiftData = SwiftStruct Struct | SwiftEnum Enum
+
+{-
+data StructTH = StructTH
+  { name :: Name
+  , tyVars :: [Name]
+  , fields :: [(Name, Type)]
+  }
+
+data EnumTH = EnumTH
+  { name :: Name
+  , tyVars :: [Name]
+  , cases :: [(Name, [(Maybe Name, Type)])]
+  }
+-}
 
 data Struct = Struct
   { name :: String
@@ -261,9 +282,152 @@ prettyTy = \case
   BigSInt64 -> "BigSInt64"
   Poly ty -> ty
 
-getSchwifty :: Name -> Q ()
-getSchwifty name = do
-  dti@DatatypeInfo{..} <- reifyDatatype name
+noConstructorVars :: ConstructorInfo -> Q ()
+noConstructorVars ConstructorInfo{..} = do
+  case constructorVars of
+    [] -> pure ()
+    _ -> fail "You cannot have existentially quantified type variables in a shwifty datatype."
+
+isDatatypeOrNewtype :: DatatypeInfo -> Q ()
+isDatatypeOrNewtype DatatypeInfo{..} = do
+  case datatypeVariant of
+    Datatype -> pure ()
+    Newtype -> pure ()
+    _ -> fail "Data Family instances are not supported"
+
+noVoidTypes :: DatatypeInfo -> Q ()
+noVoidTypes DatatypeInfo{..} = do
+  case datatypeCons of
+    [] -> fail "You cannot get shwifty with the void."
+    _ -> pure ()
+
+-- TODO: should we should only reject
+-- type variables with bad kinds if they
+-- are non-phantom?
+checkKind :: Type -> Q ()
+checkKind = \case
+  SigT (VarT _a) (VarT _k) -> pure ()
+  SigT (VarT _a) StarT -> pure ()
+  _ -> fail "Found type variable with wrong kind."
+
+type Shwifty
+  = ReaderT DatatypeInfo (ExceptT ShwiftyError Q)
+
+data ShwiftyError
+  = WrongKind
+  | VoidType
+
+getShwifty :: Name -> Q [Dec]
+getShwifty name = do
+  info <- reifyDatatype name
+  case info of
+    DatatypeInfo {
+      datatypeContext = ctx
+    , datatypeName = parentName
+    , datatypeInstTypes = instTys
+    , datatypeVariant = variant
+    , datatypeCons = cons
+    } -> do {
+       -- preliminary checks
+    ; isDatatypeOrNewtype info
+    ; mapM_ noConstructorVars cons
+    ; mapM_ checkKind instTys
+    ; noVoidTypes info
+
+    ; pure []
+    }
+
+buildTypeInstance :: ()
+  => Name
+  -> [Type]
+  -> DatatypeVariant
+  -> Q (Cxt, Type)
+buildTypeInstance tyConName varTysOrig variant = do
+  -- Make sure to expand through type/kind synonyms!
+  -- Otherwise, the eta-reduction check might get
+  -- tripped up over type variables in a synonym
+  -- that are actually dropped.
+  -- (See GHC Trac #11416 for a scenario where this
+  -- actually happened)
+  varTysExp <- mapM resolveTypeSynonyms varTysOrig
+
+  starKindStats :: [KindStatus] <- foldlM
+    (\stats ty -> case canRealiseKindStar ty of
+      NotKindStar -> do
+        fail "encountered kind variable that cannot be realised to kind *"
+      s -> pure (stats ++ [s])
+    ) [] varTysExp
+
+  let kindVarNames :: [Name]
+      kindVarNames = flip mapMaybe starKindStats
+        (\case
+            IsKindVar n -> Just n
+            _ -> Nothing
+        )
+
+  -- instantiate polykinded things to star
+  let varTysExpSubst :: [Type]
+      varTysExpSubst = map (substNamesWithKindStar kindVarNames) varTysExp
+
+  pure undefined
+
+substNamesWithKindStar :: [Name] -> Type -> Type
+substNamesWithKindStar ns t = foldr' (`substNameWithKind` starK) t ns
+  where
+    substNameWithKind :: Name -> Kind -> Type -> Type
+    substNameWithKind n k = applySubstitution (M.singleton n k)
+
+data KindStatus
+  = KindStar
+    -- ^ kind * (or some k which can be realised to *)
+  | NotKindStar
+    -- ^ any other kind
+  | IsKindVar Name
+    -- ^ actually a kind variable
+
+canRealiseKindStar :: Type -> KindStatus
+canRealiseKindStar = \case
+  VarT{} -> KindStar
+  SigT _ StarT -> KindStar
+  SigT _ (VarT k) -> IsKindVar k
+  _ -> NotKindStar
+
+--data Struct = Struct
+--  { name :: String
+--  , tyVars :: [String]
+--  , fields :: [(String,Ty)]
+--  }
+
+
+mkStruct :: ConstructorInfo -> [Name] -> Q [Dec]
+mkStruct ConstructorInfo{..} names = do
+  case constructorVariant of
+    RecordConstructor fieldNames -> do
+      let bndrs = zip fieldNames constructorFields
+      pure []
+    _ -> do
+      fail "Single-constructor products must be records in order to be shwifty."
+
+{-
+data ConstructorInfo
+  { constructorName :: Name
+      -- ^ Constructor name
+  , constructorVars :: [TyVarBndr]
+      -- ^ Constructor type parameters
+  , constructorContext :: Cxt
+      -- ^ Constructor constraints
+  ,  constructorFields :: [Type]
+      -- ^ Constructor fields
+  , constructorStrictness :: [FieldStrictness]
+      -- ^ Constructor fields' strictness (Invariant: has the same length as constructorFields)
+  , constructorVariant :: ConstructorVariant
+      -- ^ Extra information
+-}
+
+class ToSwiftData a where
+  toSwiftData :: Proxy a -> SwiftData
+
+{-
   case datatypeCons of
     [] -> fail $ "Cannot get schwifty with the void."
       ++ " You are trying to get schwifty with an empty type."
@@ -274,11 +438,20 @@ getSchwifty name = do
           let fs = zip names constructorFields
           pure ()
     _ -> pure ()
+-}
+
+getTyVars :: DatatypeInfo -> [Name]
+getTyVars DatatypeInfo{..} = id
+  . mapMaybe getFreeTyVar
+  $ datatypeInstTypes
+  where
+    getFreeTyVar = \case
+      SigT (VarT name) _kind -> Just name
+      _ -> Nothing
 
 getFreeTyVars :: DatatypeInfo -> [String]
 getFreeTyVars DatatypeInfo{..} = id
-  . catMaybes
-  . map getFreeTyVar
+  . mapMaybe getFreeTyVar
   $ datatypeInstTypes
   where
     getFreeTyVar (SigT (VarT name) _kind) = Just (prepName name)
@@ -323,9 +496,9 @@ stringE = LitE . StringL
 removeQualifiers :: String -> String
 removeQualifiers = TS.unpack . last . TS.splitOn "." . TS.pack
 
-toSwiftE :: Type -> Exp
-toSwiftE typ = AppE
-  (VarE 'toSwift)
+toSwiftTyE :: Type -> Exp
+toSwiftTyE typ = AppE
+  (VarE 'toSwiftTy)
   (SigE (ConE 'Proxy) (AppT (ConT ''Proxy) typ))
 
 {-
@@ -343,8 +516,8 @@ data T8  = T8
 data T9  = T9
 data T10 = T10
 
-getSchwifty :: Name -> Q [Dec]
-getSchwifty name = do
+getShwifty :: Name -> Q [Dec]
+getShwifty name = do
   dti@DatatypeInfo{..} <- reifyDatatype name
 
   let getFreeVarName (SigT (VarT name_) _kind) = Just name_
@@ -398,7 +571,7 @@ getDatatypePredicate :: Type -> Pred
 getDatatypePredicate typ = AppT (ConT ''Swift) typ
 
 getTypeExp :: Type -> Exp
-getTypeExp typ = AppE (VarE 'toSwift) (SigE (ConE 'Proxy) (AppT (ConT ''Proxy) typ))
+getTypeExp typ = AppE (VarE 'toSwiftTy) (SigE (ConE 'Proxy) (AppT (ConT ''Proxy) typ))
 
 getTupleType :: [Type] -> Type
 getTupleType [] = AppT ListT (ConT ''())
