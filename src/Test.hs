@@ -1,8 +1,8 @@
 {-# language TemplateHaskell #-}
 {-# language EmptyCase, GADTs, DataKinds, PolyKinds, KindSignatures,
-   DuplicateRecordFields #-}
+   ScopedTypeVariables, DuplicateRecordFields, TypeApplications #-}
 
--- {-# options_ghc -ddump-splices #-}
+--{-# options_ghc -ddump-splices #-}
 
 module Test where
 
@@ -12,10 +12,36 @@ import Data.Proxy
 data M (a :: k) = MkM
 getShwifty ''M
 
+data K a = K { getK :: a, getInt :: Int }
+getShwifty ''K
+
+data Z a b = Z { x :: Maybe a, b :: Maybe (Maybe b) }
+getShwifty ''Z
+
+data L a b = L
+  { l0 :: Int
+--  , l1 :: (a,b)
+--  , l2 :: [a]
+--  , l3 :: [b]
+  }
+getShwifty ''L
+
+testPrint :: SwiftTy a => Proxy a -> IO ()
+testPrint = putStrLn . prettyTy . toSwiftTy
+
+type X = Int
+
 test :: IO ()
-test = putStrLn
-  $ prettySwiftData
-  $ toSwiftData (Proxy :: Proxy (M Int))
+test = do
+  testPrint $ Proxy @(M X)
+  testPrint $ Proxy @(K X)
+  testPrint $ Proxy @(Z X X)
+  testPrint $ Proxy @(L X X)
+
+--test :: IO ()
+--test = putStrLn
+--  $ prettySwiftData
+--  $ toSwiftData (Proxy :: Proxy (M Int))
 
 --data M m a = MkM (m a)
 
@@ -30,7 +56,7 @@ data Foo a b (c :: k)
   = MkFoo1 Int a (Maybe b)
   | MkFoo2 b
   | MkFoo3 { x :: Int, y :: Int }
-getShwifty ''Foo
+--getShwifty ''Foo
 
 {-
 collect tyVars
