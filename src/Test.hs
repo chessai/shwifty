@@ -1,23 +1,30 @@
 {-# language TemplateHaskell #-}
-{-# language EmptyCase, GADTs, DataKinds, PolyKinds, KindSignatures #-}
+{-# language EmptyCase, GADTs, DataKinds, PolyKinds, KindSignatures,
+   DuplicateRecordFields #-}
 
-{-# options_ghc -ddump-splices #-}
+-- {-# options_ghc -ddump-splices #-}
 
 module Test where
 
 import Shwifty
+import Data.Proxy
 
 data M (a :: k) = MkM
 getShwifty ''M
 
+test :: IO ()
+test = putStrLn
+  $ prettySwiftData
+  $ toSwiftData (Proxy :: Proxy (M Int))
+
 --data M m a = MkM (m a)
 
 data Void
-getShwifty ''Void
+--getShwifty ''Void
 
 -- we cannot have existentially quantified type variables
 data Ex = forall x. Ex x
-getShwifty ''Ex
+--getShwifty ''Ex
 
 data Foo a b (c :: k)
   = MkFoo1 Int a (Maybe b)

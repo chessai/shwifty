@@ -28,6 +28,14 @@
 
 module Shwifty
   ( getShwifty
+  , SwiftData(..)
+  , Struct(..)
+  , Enum(..)
+  , ToSwiftData(..)
+  , SwiftTy(..)
+  , prettyStruct
+  , prettyEnum
+  , prettySwiftData
   ) where
 
 #include "MachDeps.h"
@@ -38,7 +46,7 @@ import Data.Proxy (Proxy(..))
 import Control.Monad (forM)
 import Data.Maybe (mapMaybe,fromMaybe)
 import Data.Functor.Identity (Identity(..))
-import Control.Lens
+import Control.Lens hiding (cons)
 import Control.Monad.IO.Class (liftIO)
 import Data.Bifunctor (bimap)
 import Data.Foldable
@@ -164,19 +172,10 @@ instance forall a b c. (SwiftTy a, SwiftTy b, SwiftTy c) => SwiftTy ((,,) a b c)
 
 data SwiftData = SwiftStruct Struct | SwiftEnum Enum
 
-{-
-data StructTH = StructTH
-  { name :: Name
-  , tyVars :: [Name]
-  , fields :: [(Name, Type)]
-  }
-
-data EnumTH = EnumTH
-  { name :: Name
-  , tyVars :: [Name]
-  , cases :: [(Name, [(Maybe Name, Type)])]
-  }
--}
+prettySwiftData :: SwiftData -> String
+prettySwiftData = \case
+  SwiftStruct s -> prettyStruct s
+  SwiftEnum e -> prettyEnum e
 
 data Struct = Struct
   { name :: String
@@ -334,8 +333,7 @@ getShwifty name = do
   info <- reifyDatatype name
   case info of
     DatatypeInfo {
-      datatypeContext = ctx
-    , datatypeName = parentName
+      datatypeName = parentName
     , datatypeInstTypes = instTys
     , datatypeVariant = variant
     , datatypeCons = cons
@@ -374,10 +372,77 @@ consToSwiftData instTys cons = do
   where
     matches :: [Q Match]
     matches = case cons of
-      [con] ->
-        [
-        ]
+      [con] -> [argsToValue False con instTys]
       _ -> []
+
+unqualName :: Name -> Exp
+unqualName = stringE . TS.unpack . last . TS.splitOn "." . TS.pack . show
+
+prettyTyVar :: Name -> Exp
+prettyTyVar = stringE . map Char.toUpper . TS.unpack . head . TS.splitOn "_" . last . TS.splitOn "." . TS.pack . show
+
+getTyVars :: [Type] -> [Name]
+getTyVars = mapMaybe getFreeTyVar
+  where
+    getFreeTyVar = \case
+      SigT (VarT name) _kind -> Just name
+      _ -> Nothing
+
+argsToValue :: Bool -> ConstructorInfo -> [Type] -> Q Match
+-- single constructor, no fields
+argsToValue False (ConstructorInfo { constructorVariant = NormalConstructor, constructorFields = [], .. }) instTys = do
+  let sd x = AppE (ConE 'SwiftStruct)
+        (AppE (ConE 'Struct) x)
+  let tyVars = ListE $ map prettyTyVar $ getTyVars instTys
+  match (conP 'Proxy [])
+        (normalB
+          $ pure
+          $ AppE (ConE 'SwiftStruct)
+          $ RecConE 'Struct
+          $ [ (mkName "name", unqualName constructorName)
+            , (mkName "tyVars", tyVars)
+            , (mkName "fields", ListE [])
+            ]
+        )
+        [] --fail "TODO: empty structs"
+-- single constructor, non-record
+argsToValue False (ConstructorInfo { constructorVariant = NormalConstructor }) instTys = do
+  fail "CANNOT GET SHWIFTY WITH SINGLE-CONSTRUCTOR NON-RECORDS!!!!!!"
+-- single constructor, record
+argsToValue False ConstructorInfo{..} instTys = do
+  fail "TODO: records"
+--argsToValue True ConstructorInfo{..} = do
+
+  --argTys <- mapM resolveTypeSynonyms constructorFields
+  --let len = length argTys
+  --args <- newNameList "arg" len
+
+  --ConstructorInfo {
+  --  constructorName = conName
+  --, constructorVariant = Norma
+ -- }
+--data Struct = Struct
+--  { name :: String
+--  , tyVars :: [String]
+--  , fields :: [(String,Ty)]
+--  }
+
+
+{-
+data ConstructorInfo
+  { constructorName :: Name
+      -- ^ Constructor name
+  , constructorVars :: [TyVarBndr]
+      -- ^ Constructor type parameters
+  , constructorContext :: Cxt
+      -- ^ Constructor constraints
+  ,  constructorFields :: [Type]
+      -- ^ Constructor fields
+  , constructorStrictness :: [FieldStrictness]
+      -- ^ Constructor fields' strictness (Invariant: has the same length as constructorFields)
+  , constructorVariant :: ConstructorVariant
+      -- ^ Extra information
+-}
 
 buildTypeInstance :: ()
   => Name
@@ -538,90 +603,8 @@ varTToName :: Type -> Name
 varTToName = fromMaybe (error "Not a type variable!")
   . varTToNameMaybe
 
---data Struct = Struct
---  { name :: String
---  , tyVars :: [String]
---  , fields :: [(String,Ty)]
---  }
-
-
-mkStruct :: ConstructorInfo -> [Name] -> Q [Dec]
-mkStruct ConstructorInfo{..} names = do
-  case constructorVariant of
-    RecordConstructor fieldNames -> do
-      let bndrs = zip fieldNames constructorFields
-      pure []
-    _ -> do
-      fail "Single-constructor products must be records in order to be shwifty."
-
-{-
-data ConstructorInfo
-  { constructorName :: Name
-      -- ^ Constructor name
-  , constructorVars :: [TyVarBndr]
-      -- ^ Constructor type parameters
-  , constructorContext :: Cxt
-      -- ^ Constructor constraints
-  ,  constructorFields :: [Type]
-      -- ^ Constructor fields
-  , constructorStrictness :: [FieldStrictness]
-      -- ^ Constructor fields' strictness (Invariant: has the same length as constructorFields)
-  , constructorVariant :: ConstructorVariant
-      -- ^ Extra information
--}
-
 class ToSwiftData a where
   toSwiftData :: Proxy a -> SwiftData
-
-getTyVars :: DatatypeInfo -> [Name]
-getTyVars DatatypeInfo{..} = id
-  . mapMaybe getFreeTyVar
-  $ datatypeInstTypes
-  where
-    getFreeTyVar = \case
-      SigT (VarT name) _kind -> Just name
-      _ -> Nothing
-
-getFreeTyVars :: DatatypeInfo -> [String]
-getFreeTyVars DatatypeInfo{..} = id
-  . mapMaybe getFreeTyVar
-  $ datatypeInstTypes
-  where
-    getFreeTyVar (SigT (VarT name) _kind) = Just (prepName name)
-    getFreeTyVar _ = Nothing
-
-prepName :: Name -> String
-prepName = capFirstLetter . removeQualifiers . show
-  where
-    capFirstLetter [] = []
-    capFirstLetter (c:cs) = Char.toUpper c : cs
-
-getTyCon :: DatatypeInfo -> String
-getTyCon DatatypeInfo{..} = id
-  . removeQualifiers
-  . show
-  $ datatypeName
-
-{-
-let getFreeVarName (SigT (VarT name_) _kind) = Just name_
-      getFreeVarName _ = Nothing
-  let numTyVars = length datatypeVars
-  let templateVars
-        | numTyVars == 0 = []
-        | numTyVars == 1 = [ConT ''T]
-        | numTyVars > 10 = fail "More than 10 type variables not supported."
-        | otherwise = take numTyVars $ [ConT ''T1, ConT ''T2, ConT ''T3, ConT ''T4, ConT ''T5, ConT ''T6, ConT ''T7, ConT ''T8, ConT ''T9, ConT ''T10]
-
-  let subMap = M.fromList $ zip
-        (catMaybes $ fmap getFreeVarName datatypeInstTypes)
-        templateVars
-  let fullyQualifiedDatatypeInfo = dti {
-          datatypeInstTypes = templateVars
-        , datatypeCons = fmap (applySubstitution subMap) datatypeCons
-      }
-
-  pure []
--}
 
 stringE :: String -> Exp
 stringE = LitE . StringL
@@ -633,105 +616,3 @@ toSwiftTyE :: Type -> Exp
 toSwiftTyE typ = AppE
   (VarE 'toSwiftTy)
   (SigE (ConE 'Proxy) (AppT (ConT ''Proxy) typ))
-
-{-
-data Decl = DeclStruct Struct | DeclEnum Enum
-
-data T   = T
-data T1  = T1
-data T2  = T2
-data T3  = T3
-data T4  = T4
-data T5  = T5
-data T6  = T6
-data T7  = T7
-data T8  = T8
-data T9  = T9
-data T10 = T10
-
-getShwifty :: Name -> Q [Dec]
-getShwifty name = do
-  dti@DatatypeInfo{..} <- reifyDatatype name
-
-  let getFreeVarName (SigT (VarT name_) _kind) = Just name_
-      getFreeVarName _ = Nothing
-  let numTyVars = length datatypeVars
-  let templateVars
-        | numTyVars == 0 = []
-        | numTyVars == 1 = [ConT ''T]
-        | numTyVars > 10 = fail "More than 10 type variables not supported."
-        | otherwise = take numTyVars $ [ConT ''T1, ConT ''T2, ConT ''T3, ConT ''T4, ConT ''T5, ConT ''T6, ConT ''T7, ConT ''T8, ConT ''T9, ConT ''T10]
-
-  let subMap = M.fromList $ zip
-        (catMaybes $ fmap getFreeVarName datatypeInstTypes)
-        templateVars
-  let fullyQualifiedDatatypeInfo = dti {
-          datatypeInstTypes = templateVars
-        , datatypeCons = fmap (applySubstitution subMap) datatypeCons
-      }
-
-  pure []
-
-getTypeExpression :: DatatypeInfo -> Q Exp
-getTypeExpression DatatypeInfo{..} = case datatypeInstTypes of
-  [] -> pure $ stringE $ getTypeName datatypeName
-  vars -> do
-    let baseName = stringE $ getTypeName datatypeName
-    let typeNames = ListE [getTypeExp typ | typ <- vars]
-    let headType = AppE (VarE 'head) typeNames
-    let tailType = AppE (VarE 'tail) typeNames
-    let comma = stringE ", "
-    x <- newName "x"
-    let tailsWithCommas = AppE (VarE 'mconcat) (CompE [BindS (VarP x) tailType, NoBindS (AppE (AppE (VarE 'mappend) comma) (VarE x))])
-    let brackets = AppE (VarE 'mconcat) (ListE [stringE "<", headType, tailsWithCommas, stringE ">"])
-    pure $ AppE (AppE (VarE 'mappend) baseName) brackets
-
-getTypeName :: Name -> String
-getTypeName = lastNameComponent . show
-
-lastNameComponent :: String -> String
-lastNameComponent = TS.unpack . last . TS.splitOn "." . TS.pack
-
-allConstructorsNullary :: [ConstructorInfo] -> Bool
-allConstructorsNullary = all isConstructorNullary
-
-isConstructorNullary :: ConstructorInfo -> Bool
-isConstructorNullary ConstructorInfo{..} =
-     constructorVariant == NormalConstructor
-  && constructorFields == []
-
-getDatatypePredicate :: Type -> Pred
-getDatatypePredicate typ = AppT (ConT ''Swift) typ
-
-getTypeExp :: Type -> Exp
-getTypeExp typ = AppE (VarE 'toSwiftTy) (SigE (ConE 'Proxy) (AppT (ConT ''Proxy) typ))
-
-getTupleType :: [Type] -> Type
-getTupleType [] = AppT ListT (ConT ''())
-getTupleType (x:[]) = x
-getTupleType conFields = apArgsT (ConT $ tupleTypeName $ length conFields) conFields
-
-apArgsT :: Type -> [Type] -> Type
-apArgsT con [] = con
-apArgsT con (x:xs) = apArgsT (AppT con x) xs
-
-apArgsE :: Exp -> [Exp] -> Exp
-apArgsE f [] = f
-apArgsE f (x:xs) = apArgsE (AppE f x) xs
-
-stringE :: String -> Exp
-stringE = LitE . StringL
-
-mkInstance :: Cxt -> Type -> [Dec] -> Dec
-mkInstance context typ decs = InstanceD Nothing context typ decs
-
-assertExtensions :: DatatypeInfo -> Q ()
-assertExtensions DatatypeInfo{..} = do
-  unlessM (isExtEnabled ScopedTypeVariables) $ do
-    fail "The ScopedTypeVariables extension is required to use Schwifty."
-  unlessM (isExtEnabled KindSignatures) $ do
-    fail "The KindSignatures extension is required to use Schwifty."
-
-unlessM :: Monad m => m Bool -> m () -> m ()
-unlessM mb x = do { b <- mb; if b then pure () else x }
--}
