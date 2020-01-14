@@ -23,58 +23,47 @@
   , TypeApplications
   , TypeFamilies
   , ViewPatterns
+  , QuantifiedConstraints
 #-}
 
 {-# options_ghc
   -Wall
-  -fno-warn-unused-imports
-  -fno-warn-unused-top-binds
+  -Werror
 #-}
 
 module Shwifty
   ( getShwifty
   , Ty(..)
-  , SwiftTy(..)
+  , Swift(..)
   , prettyTy
+  , SingSymbol(..)
+  , Options(..)
+  , X
   ) where
 
 #include "MachDeps.h"
 
-import Data.Typeable
-import Data.Constraint
 import Control.Monad.Except
-import Control.Monad.Reader
-import Data.Proxy (Proxy(..))
-import Control.Monad (forM)
-import Data.Maybe (mapMaybe,fromMaybe)
-import Data.Functor.Identity (Identity(..))
-import Control.Lens hiding (cons, (<|))
-import Control.Monad.IO.Class (liftIO)
-import Data.Bifunctor (bimap)
-import Data.Foldable
-import Data.Function ((&))
-import Data.HashMap.Strict (HashMap)
-import Data.Int
-import Data.List.NonEmpty ((<|), NonEmpty(..))
-import qualified Data.List.NonEmpty as NE
+import Data.Foldable (foldlM,foldr',foldl')
+import Data.Functor ((<&>))
+import Data.Int (Int8,Int16,Int32,Int64)
 import Data.List (intercalate)
+import Data.List.NonEmpty ((<|), NonEmpty(..))
 import Data.Maybe (catMaybes)
-import Data.Vector (Vector)
-import Data.Vector.Mutable (MVector)
-import Data.Word
-import GHC.Generics hiding (datatypeName)
-import GHC.TypeLits
+import Data.Maybe (mapMaybe,fromMaybe)
+import Data.Proxy (Proxy(..))
+import Data.Word (Word8,Word16,Word32,Word64)
+import Data.Void (Void)
+import GHC.TypeLits (Symbol, KnownSymbol, symbolVal)
 import Language.Haskell.TH hiding (stringE)
 import Language.Haskell.TH.Datatype
 import Prelude hiding (Enum(..))
-import qualified Data.HashMap.Strict as HM
+import qualified Data.Char as Char
 import qualified Data.List as L
+import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Strict as M
 import qualified Data.Text as TS
 import qualified Data.Text.Lazy as TL
-import qualified Data.Vector as V
-import qualified Data.Vector.Mutable as MV
-import qualified Data.Char as Char
 
 data Ty
   = Unit
@@ -95,12 +84,40 @@ data Ty
     -- ^ Dictionary type
   | Array Ty
     -- ^ array type
-  -- numbers
-  | I | I8 | I16 | I32 | I64 -- signed integers
-  | U | U8 | U16 | U32 | U64 -- unsigned integers
-  | F32 | F64 | Decimal -- floating point numbers
-  | BigSInt32 | BigSInt64 -- big integers
-  | Poly String -- polymorphic type variable
+  | App Ty Ty
+    -- ^ function type
+  | I
+    -- ^ signed machine integer
+  | I8
+    -- ^ signed 8-bit integer
+  | I16
+    -- ^ signed 16-bit integer
+  | I32
+    -- ^ signed 32-bit integer
+  | I64
+    -- ^ signed 64-bit integer
+  | U
+    -- ^ unsigned machine integer
+  | U8
+    -- ^ unsigned 8-bit integer
+  | U16
+    -- ^ unsigned 16-bit integer
+  | U32
+    -- ^ unsigned 32-bit integer
+  | U64
+    -- ^ unsigned 64-bit integer
+  | F32
+    -- ^ 32-bit floating point
+  | F64
+    -- ^ 64-bit floating point
+  | Decimal
+    -- ^ Increased-precision floating point
+  | BigSInt32
+    -- ^ 32-bit big integer
+  | BigSInt64
+    -- ^ 64-bit big integer
+  | Poly String
+    -- ^ polymorphic type variable
   | Struct
       { name :: String
       , tyVars :: [String]
@@ -133,61 +150,66 @@ data Options = Options
     --   and cases. The default is 2.
   }
 
-class SwiftTy a where
-  toSwiftTy :: Proxy a -> Ty
+class Swift a where
+  toSwift :: Proxy a -> Ty
 
-data X (x :: Symbol)
-instance KnownSymbol x => SwiftTy (X x) where
-  toSwiftTy _ = Poly (symbolVal (Proxy @x))
+data SingSymbol (x :: Symbol) = SingSymbol
+instance KnownSymbol x => Swift (SingSymbol x) where
+  toSwift _ = Poly (symbolVal (Proxy @x))
 
-instance SwiftTy () where
-  toSwiftTy = const Unit
+type X = Void
 
-instance forall a. SwiftTy a => SwiftTy (Maybe a) where
-  toSwiftTy = const (Optional (toSwiftTy (Proxy @a)))
+instance Swift () where
+  toSwift = const Unit
+
+instance forall a b. (Swift a, Swift b) => Swift (a -> b) where
+  toSwift = const (App (toSwift (Proxy @a)) (toSwift (Proxy @b)))
+
+instance forall a. Swift a => Swift (Maybe a) where
+  toSwift = const (Optional (toSwift (Proxy @a)))
 
 -- | N.B. we flip the ordering because in Swift they are flipped
 --   Should we though?
-instance forall a b. (SwiftTy a, SwiftTy b) => SwiftTy (Either a b) where
-  toSwiftTy = const (Result (toSwiftTy (Proxy @b)) (toSwiftTy (Proxy @a)))
+instance forall a b. (Swift a, Swift b) => Swift (Either a b) where
+  toSwift = const (Result (toSwift (Proxy @b)) (toSwift (Proxy @a)))
 
-instance SwiftTy Integer where
-  toSwiftTy = const
+instance Swift Integer where
+  toSwift = const
 #if WORD_SIZE_IN_BITS == 32
     BigSInt32
 #else
     BigSInt64
 #endif
 
-instance SwiftTy Int   where toSwiftTy = const I
-instance SwiftTy Int8  where toSwiftTy = const I8
-instance SwiftTy Int16 where toSwiftTy = const I16
-instance SwiftTy Int32 where toSwiftTy = const I32
-instance SwiftTy Int64 where toSwiftTy = const I64
+instance Swift Int   where toSwift = const I
+instance Swift Int8  where toSwift = const I8
+instance Swift Int16 where toSwift = const I16
+instance Swift Int32 where toSwift = const I32
+instance Swift Int64 where toSwift = const I64
 
-instance SwiftTy Word   where toSwiftTy = const U
-instance SwiftTy Word8  where toSwiftTy = const U8
-instance SwiftTy Word16 where toSwiftTy = const U16
-instance SwiftTy Word32 where toSwiftTy = const U32
-instance SwiftTy Word64 where toSwiftTy = const U64
+instance Swift Word   where toSwift = const U
+instance Swift Word8  where toSwift = const U8
+instance Swift Word16 where toSwift = const U16
+instance Swift Word32 where toSwift = const U32
+instance Swift Word64 where toSwift = const U64
 
-instance SwiftTy Float  where toSwiftTy = const F32
-instance SwiftTy Double where toSwiftTy = const F64
+instance Swift Float  where toSwift = const F32
+instance Swift Double where toSwift = const F64
 
-instance SwiftTy Char where toSwiftTy = const Character
+instance Swift Char where toSwift = const Character
 
-instance {-# overlappable #-} forall a. SwiftTy a => SwiftTy [a] where
-  toSwiftTy = const (Array (toSwiftTy (Proxy @a)))
+instance {-# overlappable #-} forall a. Swift a => Swift [a] where
+  toSwift = const (Array (toSwift (Proxy @a)))
 
-instance {-# overlapping #-} SwiftTy [Char] where toSwiftTy = const Str
-instance SwiftTy TL.Text where toSwiftTy = const Str
-instance SwiftTy TS.Text where toSwiftTy = const Str
+instance {-# overlapping #-} Swift [Char] where toSwift = const Str
+instance Swift TL.Text where toSwift = const Str
+instance Swift TS.Text where toSwift = const Str
 
-instance forall a b. (SwiftTy a, SwiftTy b) => SwiftTy ((,) a b) where
-  toSwiftTy = const (Tuple2 (toSwiftTy (Proxy @a)) (toSwiftTy (Proxy @b)))
+instance forall a b. (Swift a, Swift b) => Swift ((,) a b) where
+  toSwift = const (Tuple2 (toSwift (Proxy @a)) (toSwift (Proxy @b)))
 
-instance forall a b c. (SwiftTy a, SwiftTy b, SwiftTy c) => SwiftTy ((,,) a b c) where
-  toSwiftTy = const (Tuple3 (toSwiftTy (Proxy @a)) (toSwiftTy (Proxy @b)) (toSwiftTy (Proxy @c)))
+instance forall a b c. (Swift a, Swift b, Swift c) => Swift ((,,) a b c) where
+  toSwift = const (Tuple3 (toSwift (Proxy @a)) (toSwift (Proxy @b)) (toSwift (Proxy @c)))
 
 labelCase :: Maybe String -> Ty -> String
 labelCase Nothing ty = prettyTy ty
@@ -208,6 +230,7 @@ prettyTy = \case
   Result e1 e2 -> "Result<" ++ prettyTy e1 ++ ", " ++ prettyTy e2 ++ ">"
   Dictionary e1 e2 -> "Dictionary<" ++ prettyTy e1 ++ ", " ++ prettyTy e2 ++ ">"
   Array e -> "Array<" ++ prettyTy e ++ ">"
+  App e1 e2 -> "((" ++ prettyTy e1 ++ ") -> " ++ prettyTy e2 ++ ")"
   I -> "Int"
   I8 -> "Int8"
   I16 -> "Int16"
@@ -230,7 +253,7 @@ prettyTy = \case
     ++ "}"
     where
       go [] = ""
-      go ((caseName, cs):xs) = "    case " ++ caseName ++ "(" ++ (intercalate ", " (map (uncurry labelCase) cs)) ++ ")\n" ++ go xs
+      go ((caseNm, cs):xs) = "    case " ++ caseNm ++ "(" ++ (intercalate ", " (map (uncurry labelCase) cs)) ++ ")\n" ++ go xs
   Struct {name,tyVars,fields} -> []
     ++ "struct " ++ prettyTypeHeader name tyVars ++ " {\n"
     ++ go fields
@@ -245,53 +268,229 @@ noConstructorVars ConstructorInfo{..} = do
     [] -> pure ()
     _ -> fail "You cannot have existentially quantified type variables in a shwifty datatype."
 
+ensureEnabled :: Extension -> Q ()
+ensureEnabled ext = isExtEnabled ext >>= \case
+  False -> fail $ show ext ++ " is not enabled."
+    ++ " It is needed by shwifty to work."
+  True -> pure ()
+
 getShwifty :: Name -> Q [Dec]
 getShwifty name = do
-  info <- reifyDatatype name
-  case info of
-    DatatypeInfo {
-      datatypeName = parentName
-    , datatypeVars = tyVarBndrs
-    , datatypeInstTypes = instTys
-    , datatypeVariant = variant
-    , datatypeCons = cons
-    } -> do {
-       -- preliminary checks
-    -- ; isDatatypeOrNewtype info
-    ; mapM_ noConstructorVars cons
-    -- ; mapM_ checkKind instTys
-    -- ; noVoidTypes info
-    ; instanceHead --(instanceCtx, instanceType)
-        <- buildTypeInstance parentName instTys tyVarBndrs variant
-    ; (:[]) <$> instanceD
-        (pure []) --instanceCtx)
-        (pure instanceHead)
-        (methodDecs parentName instTys cons)
-    }
+  ensureEnabled ScopedTypeVariables
+  ensureEnabled DataKinds
+  reifyDatatype name >>= \case
+    DatatypeInfo
+      { datatypeName = parentName
+      , datatypeVars = tyVarBndrs
+      , datatypeInstTypes = instTys
+      , datatypeVariant = variant
+      , datatypeCons = cons
+      } -> do
+        mapM_ noConstructorVars cons
+        instanceHead <- buildTypeInstance parentName instTys tyVarBndrs variant
+        inst <- instanceD
+          (pure [])
+          (pure instanceHead)
+          (methodDecs parentName instTys cons)
+        pure [inst]
   where
     methodDecs :: Name -> [Type] -> [ConstructorInfo] -> [Q Dec]
-    methodDecs parentName instTys cons = (:[])
-      $ funD 'toSwiftTy
+    methodDecs parentName instTys cons =
+      [ funD 'toSwift
           [ clause
               []
-              (normalB $ consToSwiftTy instTys cons)
+              (normalB $ consToSwift parentName instTys cons)
               []
           ]
+      ]
 
-consToSwiftTy :: ()
-  => [Type]
+data ShwiftyError
+  = VoidType
+      { _conName :: Name
+      }
+  | SingleConNonRecord
+      { _conName :: Name
+      }
+  | KindVariableCannotBeRealised
+      { _kind :: Kind
+      }
+  | ExtensionNotEnabled
+      { _ext :: Extension
+      }
+  | ExistentialTypes
+      { _types :: [Type]
+      }
+
+type ShwiftyM = ExceptT ShwiftyError Q
+
+consToSwift' :: ()
+  => Name
+     -- ^ name of type (used for Enums only)
+  -> [Type]
+     -- ^ type variables
+  -> [ConstructorInfo]
+     -- ^ constructors
+  -> ShwiftyM Exp
+consToSwift' parentName instTys = \case
+  [] -> do
+    throwError $ VoidType parentName
+  cons -> do
+    -- TODO: use '_' instead of matching
+    value <- lift $ newName "value"
+    lift $ lamE [varP value] (caseE (varE value) matches)
+    where
+      matches :: [Q Match]
+      matches = case cons of
+        [con] -> [mkProd instTys con]
+        _ -> []
+
+consToSwift :: ()
+  => Name
+  -> [Type]
   -> [ConstructorInfo]
   -> Q Exp
-consToSwiftTy _ [] = fail "Cannot get shwifty with The Void!"
-consToSwiftTy instTys cons = do
-  -- TODO: no reason to match on this. use '_' instead.
-  value <- newName "value"
-  lamE [varP value] (caseE (varE value) matches)
-  where
-    matches :: [Q Match]
-    matches = case cons of
-      [con] -> [argsToValue False con instTys]
-      _ -> []
+consToSwift parentName instTys = \case
+  [] -> do
+    fail "Cannot get shwifty with The Void!"
+  cons -> do
+    -- TODO: use '_' instead of matching.
+    value <- newName "value"
+    lamE [varP value] (caseE (varE value) matches)
+    where
+      matches :: [Q Match]
+      matches = case cons of
+        [con] ->
+          [ mkProd instTys con
+          ]
+        _ -> do
+          let tyVars = prettyTyVars instTys
+          pure $ match
+            (conP 'Proxy [])
+            (normalB
+               $ pure
+               $ RecConE 'Enum
+               $ [ (mkName "name", unqualName parentName)
+                 , (mkName "tyVars", tyVars)
+                 , (mkName "cases", ListE [ mkCase con | con <- cons])
+                 ]
+            )
+            []
+
+mkCaseHelper :: Name -> [Exp] -> Exp
+mkCaseHelper name es = TupE [ caseName name, ListE es ]
+
+mkCase :: ConstructorInfo -> Exp
+mkCase = \case
+  -- no fields
+  ConstructorInfo
+    { constructorVariant = NormalConstructor
+    , constructorFields = []
+    , constructorName = name
+    , ..
+    } -> mkCaseHelper name []
+  -- has fields, non-record
+  ConstructorInfo
+    { constructorVariant = NormalConstructor
+    , constructorName = name
+    , constructorFields = fields
+    , ..
+    } -> mkCaseHelper name $ fields <&>
+        (\typ -> TupE
+          [ ConE 'Nothing
+          , toSwiftE typ
+          ]
+        )
+  -- infix constructor
+  -- TODO: we need to be running in ExceptT ShwiftyError Q, then make this
+  -- function return an Either
+  ConstructorInfo
+    { constructorVariant = InfixConstructor
+    , ..
+    } -> error "Infix Constructors not supported"
+  -- records
+  -- we turn names into labels
+  ConstructorInfo
+    { constructorVariant = RecordConstructor fieldNames
+    , constructorName = name
+    , constructorFields = fields
+    , ..
+    } ->
+       let fieldsMap = zip fieldNames fields
+       in mkCaseHelper name $ map caseField fieldsMap
+
+caseField :: (Name, Type) -> Exp
+caseField (n,typ) = TupE
+  [ mkLabel n
+  , toSwiftE typ
+  ]
+
+mkLabel :: Name -> Exp
+mkLabel = AppE (ConE 'Just)
+  . stringE
+  . onHead Char.toLower
+  . TS.unpack
+  . last
+  . TS.splitOn "."
+  . TS.pack
+  . show
+
+mkProd :: [Type] -> ConstructorInfo -> Q Match
+mkProd instTys = \case
+  -- single constructor, no fields
+  ConstructorInfo
+    { constructorVariant = NormalConstructor
+    , constructorFields = []
+    , ..
+    } -> do
+      let tyVars = prettyTyVars instTys
+      match
+        (conP 'Proxy [])
+        (normalB
+          $ pure
+          $ RecConE 'Struct
+          $ [ (mkName "name", unqualName constructorName)
+            , (mkName "tyVars", tyVars)
+            , (mkName "fields", ListE [])
+            ]
+        )
+        []
+  -- single constructor, non-record (Normal)
+  ConstructorInfo
+    { constructorVariant = NormalConstructor
+    } -> do
+      fail "Cannot get Shwifty with single-constructor non-records"
+  -- single constructor, non-record (Infix)
+  ConstructorInfo
+    { constructorVariant = InfixConstructor
+    } -> do
+      fail "Cannot get Shwifty with single-constructor non-records"
+  -- single constructor, record
+  ConstructorInfo
+    { constructorVariant = RecordConstructor fieldNames
+    , ..
+    } -> do
+      let tyVars = prettyTyVars instTys
+      let fieldsMap = zip fieldNames constructorFields
+      let fields = ListE $ map prettyField $ fieldsMap
+      match
+        (conP 'Proxy [])
+        (normalB
+          $ pure
+          $ RecConE 'Struct
+          $ [ (mkName "name", unqualName constructorName)
+            , (mkName "tyVars", tyVars)
+            , (mkName "fields", fields)
+            ]
+        )
+        []
+
+caseName :: Name -> Exp
+caseName = stringE . onHead Char.toLower . TS.unpack . last . TS.splitOn "." . TS.pack . show
+
+onHead :: (Char -> Char) -> String -> String
+onHead f = \case
+  [] -> []
+  (x:xs) -> f x : xs
 
 unqualName :: Name -> Exp
 unqualName = stringE . TS.unpack . last . TS.splitOn "." . TS.pack . show
@@ -308,48 +507,14 @@ getFreeTyVar = \case
   SigT (VarT name) _kind -> Just name
   _ -> Nothing
 
-argsToValue :: Bool -> ConstructorInfo -> [Type] -> Q Match
--- single constructor, no fields
-argsToValue False (ConstructorInfo { constructorVariant = NormalConstructor, constructorFields = [], .. }) instTys = do
-  let tyVars = ListE $ map prettyTyVar $ getTyVars instTys
-  match (conP 'Proxy [])
-        (normalB
-          $ pure
-          $ RecConE 'Struct
-          $ [ (mkName "name", unqualName constructorName)
-            , (mkName "tyVars", tyVars)
-            , (mkName "fields", ListE [])
-            ]
-        )
-        [] --fail "TODO: empty structs"
--- single constructor, non-record (Normal)
-argsToValue False (ConstructorInfo { constructorVariant = NormalConstructor }) instTys = do
-  fail "CANNOT GET SHWIFTY WITH SINGLE-CONSTRUCTOR NON-RECORDS!!!!!!"
--- single constructor, non-record (Infix)
-argsToValue False (ConstructorInfo { constructorVariant = InfixConstructor }) insTys = do
-  fail "CANNOT GET SHWIFTY WITH SINGLE-CONSTRUCTOR NON-RECORDS!!!!!!"
--- single constructor, record
-argsToValue False (ConstructorInfo{ constructorVariant = RecordConstructor fieldNames, .. }) instTys = do
-  let tyVars = ListE $ map prettyTyVar $ getTyVars instTys
-  fields <- fmap ListE $ mapM prettyField $ zip fieldNames constructorFields
-  match (conP 'Proxy [])
-        (normalB
-          $ pure
-          $ RecConE 'Struct
-          $ [ (mkName "name", unqualName constructorName)
-            , (mkName "tyVars", tyVars)
-            , (mkName "fields", fields)
-            ]
-        )
-        []
-argsToValue True ConstructorInfo{..} instTys = do
-  fail "Sum Types: not yet implemented"
+prettyTyVars :: [Type] -> Exp
+prettyTyVars = ListE . map prettyTyVar . getTyVars
 
-prettyField :: (Name, Type) -> Q Exp
-prettyField (name, ty) = do
-  let x = unqualName name
-  y <- toSwiftTyE ty
-  pure $ TupE [x,y]
+prettyField :: (Name, Type) -> Exp
+prettyField (name, ty) = TupE
+  [ unqualName name
+  , toSwiftE ty
+  ]
 
 buildTypeInstance :: ()
   => Name
@@ -390,7 +555,7 @@ buildTypeInstance tyConName varTysOrig tyVarBndrs variant = do
       -- Derive instance constraints (and any
       -- kind variables which are specialised to
       -- * in those constraints)
-      (preds, kvNames) = unzip $ map (deriveConstraint tyVarBndrs) varTysExpSubst
+      (preds, kvNames) = unzip $ map deriveConstraint varTysExpSubst
       kvNames' = concat kvNames
 
       --varTysExpSubst' :: [Type]
@@ -433,7 +598,7 @@ buildTypeInstance tyConName varTysOrig tyVarBndrs variant = do
       _instanceCxt = catMaybes preds
 
       instanceType :: Type
-      instanceType = AppT (ConT ''SwiftTy)
+      instanceType = AppT (ConT ''Swift)
         $ applyTyCon tyConName varTysOrigSubst'
 
 -- [TyVarBndrQ] -> CxtQ -> TypeQ -> TypeQ
@@ -481,10 +646,10 @@ hasKindStar = \case
 -- 'phantom', since a user could give a stronger
 -- RoleAnnotation to a type variable but it would
 -- still have no bearing on runtime rep.
-deriveConstraint :: [TyVarBndr] -> Type -> (Maybe Pred, [Name])
-deriveConstraint tyVarBndrs t
+deriveConstraint :: Type -> (Maybe Pred, [Name])
+deriveConstraint t
   | not (isTyVar t) = (Nothing, [])
-  | hasKindStar t = (Just (applyCon tyVarBndrs ''SwiftTy tName), [])
+  | hasKindStar t = (Just (applyCon ''Swift tName), [])
   | otherwise = (Nothing, [])
   where
     tName :: Name
@@ -497,11 +662,8 @@ isTyVar = \case
   SigT t _ -> isTyVar t
   _ -> False
 
-applyCon :: [TyVarBndr] -> Name -> Name -> Pred
-applyCon tyVarBndrs con t = AppT (ConT con) (VarT t)
---  ForallT
---    (map tyVarBndrNoSig tyVarBndrs)
---    [] (AppT (ConT con) (VarT t))
+applyCon :: Name -> Name -> Pred
+applyCon con t = AppT (ConT con) (VarT t)
 
 tyVarBndrNoSig :: TyVarBndr -> TyVarBndr
 tyVarBndrNoSig = \case
@@ -526,11 +688,37 @@ varTToName = fromMaybe (error "Not a type variable!")
 stringE :: String -> Exp
 stringE = LitE . StringL
 
-removeQualifiers :: String -> String
-removeQualifiers = TS.unpack . last . TS.splitOn "." . TS.pack
+toSwiftE :: Type -> Exp
+toSwiftE = \case
+  VarT n
+    -> AppE (ConE 'Poly) (prettyTyVar n)
+  SigT (VarT n) _
+    -> AppE (ConE 'Poly) (prettyTyVar n)
+  typ ->
+    let decompressed = decompress typ
+        prettyName = map Char.toUpper . TS.unpack . head . TS.splitOn "_" . last . TS.splitOn "." . TS.pack . show
+        filledInHoles = decompressed <&>
+          (\case
+            VarT name -> AppT
+              (ConT ''Shwifty.SingSymbol)
+              (LitT (StrTyLit (prettyName name)))
+            SigT (VarT name) _ -> AppT
+              (ConT ''Shwifty.SingSymbol)
+              (LitT (StrTyLit (prettyName name)))
+            t -> t
+          )
+        typ' = compress filledInHoles
+     in AppE
+      (VarE 'toSwift)
+      (SigE (ConE 'Proxy) (AppT (ConT ''Proxy) typ'))
 
-nameMaybe :: Name
-nameMaybe = ''Maybe
+decompress :: Type -> Rose Type
+decompress typ = case unapplyTy typ of
+  tyCon :| tyArgs -> Rose tyCon (decompress <$> tyArgs)
+
+compress :: Rose Type -> Type
+compress (Rose typ []) = typ
+compress (Rose t ts) = foldl' AppT t (compress <$> ts)
 
 unapplyTy :: Type -> NonEmpty Type
 unapplyTy = NE.reverse . go
@@ -541,57 +729,52 @@ unapplyTy = NE.reverse . go
       ForallT _ _ t -> go t
       t -> t :| []
 
---getFreeTyVar :: Type -> Maybe Name
-
-isPolymorphic :: Type -> Bool
-isPolymorphic = \case
-  VarT {} -> True
-  SigT {} -> True
-  _ -> False
-
-isMonomorphic :: Type -> Bool
-isMonomorphic = not . isPolymorphic
-
-toSwiftTyE :: Type -> Q Exp
-toSwiftTyE = \case
-  VarT n
-    -> pure $ AppE (ConE 'Poly) (prettyTyVar n)
-  SigT (VarT n) _
-    -> pure $ AppE (ConE 'Poly) (prettyTyVar n)
-  typ -> do
-    -- make map (Type, Name)
-    let decompressed = decompress typ
-    let prettyName = map Char.toUpper . TS.unpack . head . TS.splitOn "_" . last . TS.splitOn "." . TS.pack . show
-    let filledInHoles = decompressed <&>
-          (\case
-            VarT name -> AppT
-              (ConT ''Shwifty.X)
-              (LitT (StrTyLit (prettyName name)))
-            SigT (VarT name) _ -> AppT
-              (ConT ''Shwifty.X)
-              (LitT (StrTyLit (prettyName name)))
-            t -> t
-          )
-    let typ' = compress filledInHoles
-    pure $ AppE
-      (VarE 'toSwiftTy)
-      (SigE (ConE 'Proxy) (AppT (ConT ''Proxy) typ'))
-
-freshNames :: [Name] -> [Exp]
-freshNames = map prettyTyVar
-
-decompress :: Type -> Rose Type
-decompress typ = case unapplyTy typ of
-  tyCon :| tyArgs -> Rose tyCon (decompress <$> tyArgs)
-
-compress :: Rose Type -> Type
-compress (Rose typ []) = typ
-compress (Rose t ts) = foldl' AppT t (compress <$> ts)
-
---Either a b
---AppT (ConT Either) (AppT (VarT a) (VarT b))
---Either (Maybe a) (Maybe a)
-
+-- | Types can be 'stretched' out into a Rose tree.
+--   'decompress' will stretch a type out completely,
+--   in such a way that it cannot be stretched out
+--   further. 'compress' will reconstruct a type from
+--   its stretched form.
+--
+--   Also note that this is equivalent to
+--   @'Cofree' 'NonEmpty' 'Type'@.
+--
+--   Examples:
+--
+--   Maybe a
+--   =>
+--   AppT (ConT Maybe) (VarT a)
+--
+--
+--   Either a b
+--   =>
+--   AppT (AppT (ConT Either) (VarT a)) (VarT b)
+--   =>
+--   Rose (ConT Either)
+--     [ Rose (VarT a)
+--         [
+--         ]
+--     , Rose (VarT b)
+--         [
+--         ]
+--     ]
+--
+--
+--   Either (Maybe a) (Maybe b)
+--   =>
+--   AppT (AppT (ConT Either) (AppT (ConT Maybe) (VarT a))) (AppT (ConT Maybe) (VarT b))
+--   =>
+--   Rose (ConT Either)
+--     [ Rose (ConT Maybe)
+--         [ Rose (VarT a)
+--             [
+--             ]
+--         ]
+--     , Rose (ConT Maybe)
+--         [ Rose (VarT a)
+--             [
+--             ]
+--         ]
+--     ]
 data Rose a = Rose a [Rose a]
   deriving stock (Eq, Show)
   deriving stock (Functor,Foldable,Traversable)
