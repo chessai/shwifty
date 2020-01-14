@@ -2,7 +2,7 @@
 {-# language EmptyCase, GADTs, DataKinds, PolyKinds, KindSignatures,
    ScopedTypeVariables, DuplicateRecordFields, TypeApplications #-}
 
---{-# options_ghc -ddump-splices #-}
+{-# options_ghc -ddump-splices #-}
 
 module Test where
 
@@ -10,19 +10,25 @@ import Shwifty
 import Data.Proxy
 
 data M (a :: k) = MkM
-getShwifty ''M
+--getShwifty ''M
+
+data OneTyVar a = OneTyVar
+  { one :: Either (Maybe a) (Maybe a)
+  , two :: Maybe (Maybe (Maybe (Maybe a)))
+  } --Maybe a }
+getShwifty ''OneTyVar
 
 data K a = K { getK :: a, getInt :: Int }
-getShwifty ''K
+--getShwifty ''K
 
 data Z a b = Z { x :: Maybe a, b :: Maybe (Maybe b) }
 getShwifty ''Z
 
 data L a b = L
   { l0 :: Int
---  , l1 :: (a,b)
---  , l2 :: [a]
---  , l3 :: [b]
+  , l1 :: (a,b)
+  , l2 :: [a]
+  , l3 :: [b]
   }
 getShwifty ''L
 
@@ -33,8 +39,9 @@ type X = Int
 
 test :: IO ()
 test = do
-  testPrint $ Proxy @(M X)
-  testPrint $ Proxy @(K X)
+  pure ()
+  testPrint $ Proxy @(OneTyVar X)
+--  testPrint $ Proxy @(K X)
   testPrint $ Proxy @(Z X X)
   testPrint $ Proxy @(L X X)
 
