@@ -318,7 +318,8 @@ data ShwiftyError
       { _conName :: Name
       }
   | KindVariableCannotBeRealised
-      { _kind :: Kind
+      { _typName :: Name
+      , _kind :: Kind
       }
   | ExtensionNotEnabled
       { _ext :: Extension
@@ -346,26 +347,50 @@ prettyShwiftyError = \case
     ++ ": Cannot get shwifty with infix constructors. "
     ++ "Swift doesn't support them. Try changing "
     ++ n ++ " into a prefix constructor!"
-  KindVariableCannotBeRealised k -> mempty
-    ++ "Encountered a kind variable that can't "
-    ++ "get shwifty! Shwifty needs to be able "
-    ++ "to realise your kind variables to `*`, "
-    ++ "since that's all that makes sense in "
-    ++ "Swift. The only kinds that can happen with "
-    ++ "are `*` and the free-est kind, `k`."
+  KindVariableCannotBeRealised (nameStr -> n) typ ->
+    let (typStr, kindStr) = prettyKindVar typ
+    in mempty
+      ++ n
+      ++ ": Encountered a type variable ("
+      ++ typStr
+      ++ ") with a kind ("
+      ++ kindStr
+      ++ ") that can't "
+      ++ "get shwifty! Shwifty needs to be able "
+      ++ "to realise your kind variables to `*`, "
+      ++ "since that's all that makes sense in "
+      ++ "Swift. The only kinds that can happen with "
+      ++ "are `*` and the free-est kind, `k`."
   ExtensionNotEnabled ext -> mempty
     ++ show ext
     ++ " is not enabled. Shwifty needs it to work!"
-  --ExistentialTypes (nameStr -> n) tys -> mempty
-  --  ++ n
-  --  ++ " has existenial type variables {"
-  --  ++ L.intercalate "," (map prettyTyVarStr tys)
-  --  ++ "}! doesn't support these."
+  -- TODO: make this not print out implicit kinds.
+  -- e.g. for `data Ex = forall x. Ex x`, there are
+  -- no implicit `TyVarBndr`s, but for
+  -- `data Ex = forall x y z. Ex x`, there are two:
+  -- the kinds inferred by `y` and `z` are both `k`.
+  -- We print these out - this could be confusing to
+  -- the end user. I'm not immediately certain how to
+  -- be rid of them.
+  ExistentialTypes (nameStr -> n) tys -> mempty
+    ++ n
+    ++ " has existential type variables ("
+    ++ L.intercalate ", " (map prettyTyVarBndrStr tys)
+    ++ ")! Shwifty doesn't support these."
 
-prettyTyVarStr :: Type -> String
-prettyTyVarStr typ = case getFreeTyVar typ of
-  Nothing -> error "Shwifty.prettyTyVarStr: not a free type variable"
-  Just n -> TS.unpack . head . TS.splitOn "_" . last . TS.splitOn "." . TS.pack . show $ n
+prettyTyVarBndrStr :: TyVarBndr -> String
+prettyTyVarBndrStr = \case
+  PlainTV n -> go n
+  KindedTV n _ -> go n
+  where
+    go = TS.unpack . head . TS.splitOn "_" . last . TS.splitOn "." . TS.pack . show
+
+prettyKindVar :: Type -> (String, String)
+prettyKindVar = \case
+  SigT typ k -> (go typ, go k)
+  _ -> error "Shwifty.prettyKindVar: used on a type without a kind signature"
+  where
+    go = TS.unpack . head . TS.splitOn "_" . last . TS.splitOn "." . TS.pack . show . ppr
 
 type ShwiftyM = ExceptT ShwiftyError Q
 
@@ -493,7 +518,7 @@ mkProd instTys = \case
     { constructorVariant = InfixConstructor
     , constructorName = name
     } -> do
-      throwError $ SingleConNonRecord name
+      throwError $ EncounteredInfixConstructor name
   -- single constructor, record
   ConstructorInfo
     { constructorVariant = RecordConstructor fieldNames
@@ -565,9 +590,9 @@ buildTypeInstance' tyConName varTysOrig tyVarBndrs variant = do
   varTysExp <- lift $ mapM resolveTypeSynonyms varTysOrig
 
   starKindStats :: [KindStatus] <- foldlM
-    (\stats ty -> case canRealiseKindStar ty of
+    (\stats k -> case canRealiseKindStar k of
       NotKindStar -> do
-        throwError $ KindVariableCannotBeRealised ty
+        throwError $ KindVariableCannotBeRealised tyConName k
       s -> pure (stats ++ [s])
     ) [] varTysExp
 

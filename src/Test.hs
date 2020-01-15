@@ -1,5 +1,6 @@
 {-# language TemplateHaskell #-}
 {-# language ScopedTypeVariables, DataKinds #-}
+{-# language KindSignatures, PolyKinds, GADTs #-}
 -- {-# language EmptyCase, GADTs, DataKinds, PolyKinds, KindSignatures,
 --   ScopedTypeVariables, DuplicateRecordFields, TypeApplications #-}
 
@@ -18,6 +19,21 @@ data OneTyVar a = OneTyVar
   }
 getShwifty ''OneTyVar
 
+--data VoidTest
+--getShwifty ''VoidTest
+
+--data SingleConNonRecordTest
+--  = SingleConNonRecordTest Int
+--getShwifty ''SingleConNonRecordTest
+
+--data InfixConTest = Int :+: Int
+--getShwifty ''InfixConTest
+
+--data KindVarRealisationTest (a :: Maybe k) = K
+--getShwifty ''KindVarRealisationTest
+
+--data ExTypsTest = forall x y z. Ex x
+--getShwifty ''ExTypsTest
 {-
 data M (a :: k) = MkM
 getShwifty ''M
