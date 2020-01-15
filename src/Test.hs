@@ -2,10 +2,11 @@
 {-# language ScopedTypeVariables, DataKinds #-}
 {-# language KindSignatures, PolyKinds, GADTs #-}
 {-# language TypeApplications #-}
+{-# language DuplicateRecordFields #-}
 -- {-# language EmptyCase, GADTs, DataKinds, PolyKinds, KindSignatures,
 --   ScopedTypeVariables, DuplicateRecordFields, TypeApplications #-}
 
-{-# options_ghc -ddump-splices #-}
+--{-# options_ghc -ddump-splices #-}
 
 module Test where
 
@@ -16,11 +17,6 @@ import Data.Void (Void)
 
 data M (a :: k) = MkM
 getShwifty ''M
-
-data Contains a = Contains
-  { field :: M a
-  }
-getShwifty ''Contains
 
 data OneTyVar a = OneTyVar
   { one :: Either (Maybe a) (Maybe a)
@@ -48,11 +44,19 @@ data Foo a b (c :: k)
   | MkFoo3 { intField1 :: Int, intField2 :: Int }
 getShwifty ''Foo
 
+data Contains a = Contains
+  { m1 :: M Int
+  , m2 :: M a
+  , m3 :: Foo a a a
+  }
+getShwifty ''Contains
+
 test :: IO ()
 test = do
   let testPrint :: ToSwiftData a => Proxy a -> IO ()
       testPrint = putStrLn . prettySwiftData . toSwiftData
   pure ()
+  testPrint $ Proxy @(Contains X)
   testPrint $ Proxy @(Foo X X X)
   testPrint $ Proxy @(OneTyVar X)
   testPrint $ Proxy @(K X)
