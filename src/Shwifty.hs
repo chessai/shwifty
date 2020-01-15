@@ -28,16 +28,19 @@
 
 {-# options_ghc
   -Wall
-  -Werror
 #-}
 
 module Shwifty
   ( getShwifty
   , Ty(..)
-  , Swift(..)
-  , prettyTy
-  , SingSymbol(..)
+  , SwiftData(..)
   , Options(..)
+
+  , Swift(..)
+  , ToSwiftData(..)
+
+  , prettyTy
+  , prettySwiftData
   , X
   ) where
 
@@ -49,8 +52,7 @@ import Data.Functor ((<&>))
 import Data.Int (Int8,Int16,Int32,Int64)
 import Data.List (intercalate)
 import Data.List.NonEmpty ((<|), NonEmpty(..))
-import Data.Maybe (catMaybes)
-import Data.Maybe (mapMaybe,fromMaybe)
+import Data.Maybe (mapMaybe)
 import Data.Proxy (Proxy(..))
 import Data.Word (Word8,Word16,Word32,Word64)
 import Data.Void (Void)
@@ -118,16 +120,25 @@ data Ty
     -- ^ 64-bit big integer
   | Poly String
     -- ^ polymorphic type variable
-  | Struct
+  | Concrete String [Ty]
+    -- ^ a concrete type variable, and its
+    --   type variables. Will typically be generated
+    --   by 'getShwifty'.
+
+data SwiftData
+  = SwiftStruct
       { name :: String
       , tyVars :: [String]
       , fields :: [(String, Ty)]
       }
-  | Enum
+  | SwiftEnum
       { name :: String
       , tyVars :: [String]
       , cases :: [(String, [(Maybe String, Ty)])]
       }
+
+class ToSwiftData a where
+  toSwiftData :: Proxy a -> SwiftData
 
 -- | Options that specify how to
 --   encode your 'SwiftData' to a swift type.
@@ -153,7 +164,7 @@ data Options = Options
 class Swift a where
   toSwift :: Proxy a -> Ty
 
-data SingSymbol (x :: Symbol) = SingSymbol
+data SingSymbol (x :: Symbol)
 instance KnownSymbol x => Swift (SingSymbol x) where
   toSwift _ = Poly (symbolVal (Proxy @x))
 
@@ -247,14 +258,21 @@ prettyTy = \case
   BigSInt32 -> "BigSInt32"
   BigSInt64 -> "BigSInt64"
   Poly ty -> ty
-  Enum {name,tyVars,cases} -> []
+  Concrete ty tys -> ty
+    ++ "<"
+    ++ intercalate ", " (map prettyTy tys)
+    ++ ">"
+
+prettySwiftData :: SwiftData -> String
+prettySwiftData = \case
+  SwiftEnum {name,tyVars,cases} -> []
     ++ "enum " ++ prettyTypeHeader name tyVars ++ " {\n"
     ++ go cases
     ++ "}"
     where
       go [] = ""
       go ((caseNm, cs):xs) = "    case " ++ caseNm ++ "(" ++ (intercalate ", " (map (uncurry labelCase) cs)) ++ ")\n" ++ go xs
-  Struct {name,tyVars,fields} -> []
+  SwiftStruct {name,tyVars,fields} -> []
     ++ "struct " ++ prettyTypeHeader name tyVars ++ " {\n"
     ++ go fields
     ++ "}"
@@ -288,16 +306,21 @@ getShwifty' name = do
     } <- lift $ reifyDatatype name
   noExistentials cons
   !instanceHead <-
-    buildTypeInstance' parentName instTys tyVarBndrs variant
+    buildTypeInstance parentName instTys tyVarBndrs variant
   clausedUp <- consToSwift' parentName instTys cons
-  inst <- lift $ instanceD
+  swiftDataInst <- lift $ instanceD
     (pure [])
     (pure instanceHead)
-    [ funD 'toSwift
+    [ funD 'toSwiftData
       [ clause [] (normalB (pure clausedUp)) []
       ]
     ]
-  pure [inst]
+--  swiftTyInstance <- lift $ instanceD
+--    (pure [])
+--
+--    []
+
+  pure [swiftDataInst ] --, swiftTyInstance]
 
 noExistentials :: [ConstructorInfo] -> ShwiftyM ()
 noExistentials cs = forM_ cs $ \ConstructorInfo{..} ->
@@ -385,6 +408,10 @@ prettyTyVarBndrStr = \case
   where
     go = TS.unpack . head . TS.splitOn "_" . last . TS.splitOn "." . TS.pack . show
 
+-- prettify the type and kind.
+-- we only care about 'SigT' because
+-- this will only be used on types
+-- with bad kinds.
 prettyKindVar :: Type -> (String, String)
 prettyKindVar = \case
   SigT typ k -> (go typ, go k)
@@ -422,7 +449,7 @@ consToSwift' parentName instTys = \case
             (conP 'Proxy [])
             (normalB
                $ pure
-               $ RecConE 'Enum
+               $ RecConE 'SwiftEnum
                $ [ (mkName "name", unqualName parentName)
                  , (mkName "tyVars", tyVars)
                  , (mkName "cases", ListE cases)
@@ -467,12 +494,11 @@ mkCase = \case
     , constructorFields = fields
     , ..
     } ->
-       let fieldsMap = zip fieldNames fields
-           cases = map caseField fieldsMap
+       let cases = zipWith caseField fieldNames fields
        in Right $ mkCaseHelper name cases
 
-caseField :: (Name, Type) -> Exp
-caseField (n,typ) = TupE
+caseField :: Name -> Type -> Exp
+caseField n typ = TupE
   [ mkLabel n
   , toSwiftE typ
   ]
@@ -500,7 +526,7 @@ mkProd instTys = \case
         (conP 'Proxy [])
         (normalB
           $ pure
-          $ RecConE 'Struct
+          $ RecConE 'SwiftStruct
           $ [ (mkName "name", unqualName constructorName)
             , (mkName "tyVars", tyVars)
             , (mkName "fields", ListE [])
@@ -525,13 +551,12 @@ mkProd instTys = \case
     , ..
     } -> do
       let tyVars = prettyTyVars instTys
-      let fieldsMap = zip fieldNames constructorFields
-      let fields = ListE $ map prettyField $ fieldsMap
+      let fields = ListE $ zipWith prettyField fieldNames constructorFields
       lift $ match
         (conP 'Proxy [])
         (normalB
           $ pure
-          $ RecConE 'Struct
+          $ RecConE 'SwiftStruct
           $ [ (mkName "name", unqualName constructorName)
             , (mkName "tyVars", tyVars)
             , (mkName "fields", fields)
@@ -568,19 +593,24 @@ getFreeTyVar = \case
 prettyTyVars :: [Type] -> Exp
 prettyTyVars = ListE . map prettyTyVar . getTyVars
 
-prettyField :: (Name, Type) -> Exp
-prettyField (name, ty) = TupE
+prettyField :: Name -> Type -> Exp
+prettyField name ty = TupE
   [ unqualName name
   , toSwiftE ty
   ]
 
-buildTypeInstance' :: ()
+-- build the instance head for a type
+buildTypeInstance :: ()
   => Name
+     -- ^ name of the type
   -> [Type]
+     -- ^ type variables
   -> [TyVarBndr]
+     -- ^ the binders for our tyvars
   -> DatatypeVariant
+     -- ^ variant (datatype, newtype, data family, newtype family)
   -> ShwiftyM Type
-buildTypeInstance' tyConName varTysOrig tyVarBndrs variant = do
+buildTypeInstance tyConName varTysOrig tyVarBndrs variant = do
   -- Make sure to expand through type/kind synonyms!
   -- Otherwise, the eta-reduction check might get
   -- tripped up over type variables in a synonym
@@ -589,6 +619,8 @@ buildTypeInstance' tyConName varTysOrig tyVarBndrs variant = do
   -- actually happened)
   varTysExp <- lift $ mapM resolveTypeSynonyms varTysOrig
 
+  -- get the kind status of all of our types.
+  -- we must realise them all to *.
   starKindStats :: [KindStatus] <- foldlM
     (\stats k -> case canRealiseKindStar k of
       NotKindStar -> do
@@ -604,20 +636,8 @@ buildTypeInstance' tyConName varTysOrig tyVarBndrs variant = do
         )
 
   -- instantiate polykinded things to star
-  let varTysExpSubst :: [Type]
-      varTysExpSubst = map (substNamesWithKindStar kindVarNames) varTysExp
-
-  let preds :: [Maybe Pred]
-      kvNames :: [[Name]]
-      kvNames' :: [Name]
-      -- Derive instance constraints (and any
-      -- kind variables which are specialised to
-      -- * in those constraints)
-      (preds, kvNames) = unzip $ map deriveConstraint varTysExpSubst
-      kvNames' = concat kvNames
-
-      --varTysExpSubst' :: [Type]
-      --varTysExpSubst' = map (substNamesWithKindStar kvNames') varTysExpSubst
+  let --varTysExpSubst :: [Type]
+      --varTysExpSubst = map (substNamesWithKindStar kindVarNames) varTysExp
 
       -- We now sub all of the specialised-to-* kind
       -- variable names with *, but in the original types,
@@ -638,7 +658,7 @@ buildTypeInstance' tyConName varTysOrig tyVarBndrs variant = do
       --   instance C (Fam [Char])
       varTysOrigSubst :: [Type]
       varTysOrigSubst =
-        map (substNamesWithKindStar (kindVarNames `L.union` kvNames')) $ varTysOrig
+        map (substNamesWithKindStar kindVarNames) $ varTysOrig
 
       isDataFamily :: Bool
       isDataFamily = case variant of
@@ -652,11 +672,8 @@ buildTypeInstance' tyConName varTysOrig tyVarBndrs variant = do
         then varTysOrigSubst
         else map unSigT varTysOrigSubst
 
-      _instanceCxt :: Cxt
-      _instanceCxt = catMaybes preds
-
       instanceType :: Type
-      instanceType = AppT (ConT ''Swift)
+      instanceType = AppT (ConT ''ToSwiftData)
         $ applyTyCon tyConName varTysOrigSubst'
 
   lift $ forallT
@@ -691,37 +708,6 @@ canRealiseKindStar = \case
   SigT _ (VarT k) -> IsKindVar k
   _ -> NotKindStar
 
-hasKindStar :: Type -> Bool
-hasKindStar = \case
-  VarT {} -> True
-  SigT _ StarT -> True
-  _ -> False
-
--- TODO: type variables with no bearing on runtime rep
--- should not get constraints. note that
--- 'no bearing on runtime rep' is different than
--- 'phantom', since a user could give a stronger
--- RoleAnnotation to a type variable but it would
--- still have no bearing on runtime rep.
-deriveConstraint :: Type -> (Maybe Pred, [Name])
-deriveConstraint t
-  | not (isTyVar t) = (Nothing, [])
-  | hasKindStar t = (Just (applyCon ''Swift tName), [])
-  | otherwise = (Nothing, [])
-  where
-    tName :: Name
-    tName = varTToName t
-
--- is the given type a type variable?
-isTyVar :: Type -> Bool
-isTyVar = \case
-  VarT _ -> True
-  SigT t _ -> isTyVar t
-  _ -> False
-
-applyCon :: Name -> Name -> Pred
-applyCon con t = AppT (ConT con) (VarT t)
-
 tyVarBndrNoSig :: TyVarBndr -> TyVarBndr
 tyVarBndrNoSig = \case
   PlainTV n -> PlainTV n
@@ -731,16 +717,6 @@ tyVarBndrNoSig = \case
 -- type variables
 applyTyCon :: Name -> [Type] -> Type
 applyTyCon = foldl' AppT . ConT
-
-varTToNameMaybe :: Type -> Maybe Name
-varTToNameMaybe = \case
-  VarT n -> Just n
-  SigT t _ -> varTToNameMaybe t
-  _ -> Nothing
-
-varTToName :: Type -> Name
-varTToName = fromMaybe (error "Not a type variable!")
-  . varTToNameMaybe
 
 stringE :: String -> Exp
 stringE = LitE . StringL
