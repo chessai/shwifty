@@ -262,53 +262,59 @@ prettyTy = \case
       go [] = ""
       go ((fieldName,ty):fs) = "    let " ++ fieldName ++ ": " ++ prettyTy ty ++ "\n" ++ go fs
 
-noConstructorVars :: ConstructorInfo -> Q ()
-noConstructorVars ConstructorInfo{..} = do
-  case constructorVars of
-    [] -> pure ()
-    _ -> fail "You cannot have existentially quantified type variables in a shwifty datatype."
-
-ensureEnabled :: Extension -> Q ()
-ensureEnabled ext = isExtEnabled ext >>= \case
-  False -> fail $ show ext ++ " is not enabled."
-    ++ " It is needed by shwifty to work."
-  True -> pure ()
+ensureEnabled :: Extension -> ShwiftyM ()
+ensureEnabled ext = do
+  enabled <- lift $ isExtEnabled ext
+  unless enabled $ do
+    throwError $ ExtensionNotEnabled ext
 
 getShwifty :: Name -> Q [Dec]
 getShwifty name = do
+  r <- runExceptT $ getShwifty' name
+  case r of
+    Left e -> fail $ prettyShwiftyError e
+    Right d -> pure d
+
+getShwifty' :: Name -> ShwiftyM [Dec]
+getShwifty' name = do
   ensureEnabled ScopedTypeVariables
   ensureEnabled DataKinds
-  reifyDatatype name >>= \case
-    DatatypeInfo
-      { datatypeName = parentName
-      , datatypeVars = tyVarBndrs
-      , datatypeInstTypes = instTys
-      , datatypeVariant = variant
-      , datatypeCons = cons
-      } -> do
-        mapM_ noConstructorVars cons
-        instanceHead <- buildTypeInstance parentName instTys tyVarBndrs variant
-        inst <- instanceD
-          (pure [])
-          (pure instanceHead)
-          (methodDecs parentName instTys cons)
-        pure [inst]
-  where
-    methodDecs :: Name -> [Type] -> [ConstructorInfo] -> [Q Dec]
-    methodDecs parentName instTys cons =
-      [ funD 'toSwift
-          [ clause
-              []
-              (normalB $ consToSwift parentName instTys cons)
-              []
-          ]
+  DatatypeInfo
+    { datatypeName = parentName
+    , datatypeVars = tyVarBndrs
+    , datatypeInstTypes = instTys
+    , datatypeVariant = variant
+    , datatypeCons = cons
+    } <- lift $ reifyDatatype name
+  noExistentials cons
+  !instanceHead <-
+    buildTypeInstance' parentName instTys tyVarBndrs variant
+  clausedUp <- consToSwift' parentName instTys cons
+  inst <- lift $ instanceD
+    (pure [])
+    (pure instanceHead)
+    [ funD 'toSwift
+      [ clause [] (normalB (pure clausedUp)) []
       ]
+    ]
+  pure [inst]
+
+noExistentials :: [ConstructorInfo] -> ShwiftyM ()
+noExistentials cs = forM_ cs $ \ConstructorInfo{..} ->
+  case (constructorName, constructorVars) of
+    (_, []) -> do
+      pure ()
+    (cn, cvs) -> do
+      throwError $ ExistentialTypes cn cvs
 
 data ShwiftyError
   = VoidType
       { _conName :: Name
       }
   | SingleConNonRecord
+      { _conName :: Name
+      }
+  | EncounteredInfixConstructor
       { _conName :: Name
       }
   | KindVariableCannotBeRealised
@@ -318,8 +324,48 @@ data ShwiftyError
       { _ext :: Extension
       }
   | ExistentialTypes
-      { _types :: [Type]
+      { _conName :: Name
+      , _types :: [TyVarBndr]
       }
+
+prettyShwiftyError :: ShwiftyError -> String
+prettyShwiftyError = \case
+  VoidType (nameStr -> n) -> mempty
+    ++ n
+    ++ ": Cannot get shwifty with void types. "
+    ++ n ++ " has no constructors. Try adding some!"
+  SingleConNonRecord (nameStr -> n) -> mempty
+    ++ n
+    ++ ": Cannot get shwifty with single-constructor "
+    ++ "non-record types. This is due to a "
+    ++ "restriction of Swift that prohibits structs "
+    ++ "from not having named fields. Try turning "
+    ++ n ++ " into a record!"
+  EncounteredInfixConstructor (nameStr -> n) -> mempty
+    ++ n
+    ++ ": Cannot get shwifty with infix constructors. "
+    ++ "Swift doesn't support them. Try changing "
+    ++ n ++ " into a prefix constructor!"
+  KindVariableCannotBeRealised k -> mempty
+    ++ "Encountered a kind variable that can't "
+    ++ "get shwifty! Shwifty needs to be able "
+    ++ "to realise your kind variables to `*`, "
+    ++ "since that's all that makes sense in "
+    ++ "Swift. The only kinds that can happen with "
+    ++ "are `*` and the free-est kind, `k`."
+  ExtensionNotEnabled ext -> mempty
+    ++ show ext
+    ++ " is not enabled. Shwifty needs it to work!"
+  --ExistentialTypes (nameStr -> n) tys -> mempty
+  --  ++ n
+  --  ++ " has existenial type variables {"
+  --  ++ L.intercalate "," (map prettyTyVarStr tys)
+  --  ++ "}! doesn't support these."
+
+prettyTyVarStr :: Type -> String
+prettyTyVarStr typ = case getFreeTyVar typ of
+  Nothing -> error "Shwifty.prettyTyVarStr: not a free type variable"
+  Just n -> TS.unpack . head . TS.splitOn "_" . last . TS.splitOn "." . TS.pack . show $ n
 
 type ShwiftyM = ExceptT ShwiftyError Q
 
@@ -337,41 +383,24 @@ consToSwift' parentName instTys = \case
   cons -> do
     -- TODO: use '_' instead of matching
     value <- lift $ newName "value"
+    matches <- matchesWorker
     lift $ lamE [varP value] (caseE (varE value) matches)
     where
-      matches :: [Q Match]
-      matches = case cons of
-        [con] -> [mkProd instTys con]
-        _ -> []
-
-consToSwift :: ()
-  => Name
-  -> [Type]
-  -> [ConstructorInfo]
-  -> Q Exp
-consToSwift parentName instTys = \case
-  [] -> do
-    fail "Cannot get shwifty with The Void!"
-  cons -> do
-    -- TODO: use '_' instead of matching.
-    value <- newName "value"
-    lamE [varP value] (caseE (varE value) matches)
-    where
-      matches :: [Q Match]
-      matches = case cons of
-        [con] ->
-          [ mkProd instTys con
-          ]
+      -- bad name
+      matchesWorker :: ShwiftyM [Q Match]
+      matchesWorker = case cons of
+        [con] -> ((:[]) . pure) <$> mkProd instTys con
         _ -> do
           let tyVars = prettyTyVars instTys
-          pure $ match
+          cases <- forM cons (liftEither . mkCase)
+          pure $ (:[]) $ match
             (conP 'Proxy [])
             (normalB
                $ pure
                $ RecConE 'Enum
                $ [ (mkName "name", unqualName parentName)
                  , (mkName "tyVars", tyVars)
-                 , (mkName "cases", ListE [ mkCase con | con <- cons])
+                 , (mkName "cases", ListE cases)
                  ]
             )
             []
@@ -379,7 +408,7 @@ consToSwift parentName instTys = \case
 mkCaseHelper :: Name -> [Exp] -> Exp
 mkCaseHelper name es = TupE [ caseName name, ListE es ]
 
-mkCase :: ConstructorInfo -> Exp
+mkCase :: ConstructorInfo -> Either ShwiftyError Exp
 mkCase = \case
   -- no fields
   ConstructorInfo
@@ -387,26 +416,24 @@ mkCase = \case
     , constructorFields = []
     , constructorName = name
     , ..
-    } -> mkCaseHelper name []
+    } -> Right $ mkCaseHelper name []
   -- has fields, non-record
   ConstructorInfo
     { constructorVariant = NormalConstructor
     , constructorName = name
     , constructorFields = fields
     , ..
-    } -> mkCaseHelper name $ fields <&>
+    } -> Right $ mkCaseHelper name $ fields <&>
         (\typ -> TupE
           [ ConE 'Nothing
           , toSwiftE typ
           ]
         )
-  -- infix constructor
-  -- TODO: we need to be running in ExceptT ShwiftyError Q, then make this
-  -- function return an Either
   ConstructorInfo
     { constructorVariant = InfixConstructor
+    , constructorName = name
     , ..
-    } -> error "Infix Constructors not supported"
+    } -> Left $ EncounteredInfixConstructor name
   -- records
   -- we turn names into labels
   ConstructorInfo
@@ -416,7 +443,8 @@ mkCase = \case
     , ..
     } ->
        let fieldsMap = zip fieldNames fields
-       in mkCaseHelper name $ map caseField fieldsMap
+           cases = map caseField fieldsMap
+       in Right $ mkCaseHelper name cases
 
 caseField :: (Name, Type) -> Exp
 caseField (n,typ) = TupE
@@ -434,7 +462,7 @@ mkLabel = AppE (ConE 'Just)
   . TS.pack
   . show
 
-mkProd :: [Type] -> ConstructorInfo -> Q Match
+mkProd :: [Type] -> ConstructorInfo -> ShwiftyM Match
 mkProd instTys = \case
   -- single constructor, no fields
   ConstructorInfo
@@ -443,7 +471,7 @@ mkProd instTys = \case
     , ..
     } -> do
       let tyVars = prettyTyVars instTys
-      match
+      lift $ match
         (conP 'Proxy [])
         (normalB
           $ pure
@@ -457,13 +485,15 @@ mkProd instTys = \case
   -- single constructor, non-record (Normal)
   ConstructorInfo
     { constructorVariant = NormalConstructor
+    , constructorName = name
     } -> do
-      fail "Cannot get Shwifty with single-constructor non-records"
+      throwError $ SingleConNonRecord name
   -- single constructor, non-record (Infix)
   ConstructorInfo
     { constructorVariant = InfixConstructor
+    , constructorName = name
     } -> do
-      fail "Cannot get Shwifty with single-constructor non-records"
+      throwError $ SingleConNonRecord name
   -- single constructor, record
   ConstructorInfo
     { constructorVariant = RecordConstructor fieldNames
@@ -472,7 +502,7 @@ mkProd instTys = \case
       let tyVars = prettyTyVars instTys
       let fieldsMap = zip fieldNames constructorFields
       let fields = ListE $ map prettyField $ fieldsMap
-      match
+      lift $ match
         (conP 'Proxy [])
         (normalB
           $ pure
@@ -492,8 +522,11 @@ onHead f = \case
   [] -> []
   (x:xs) -> f x : xs
 
+nameStr :: Name -> String
+nameStr = TS.unpack . last . TS.splitOn "." . TS.pack . show
+
 unqualName :: Name -> Exp
-unqualName = stringE . TS.unpack . last . TS.splitOn "." . TS.pack . show
+unqualName = stringE . nameStr
 
 prettyTyVar :: Name -> Exp
 prettyTyVar = stringE . map Char.toUpper . TS.unpack . head . TS.splitOn "_" . last . TS.splitOn "." . TS.pack . show
@@ -516,25 +549,25 @@ prettyField (name, ty) = TupE
   , toSwiftE ty
   ]
 
-buildTypeInstance :: ()
+buildTypeInstance' :: ()
   => Name
   -> [Type]
   -> [TyVarBndr]
   -> DatatypeVariant
-  -> Q Type
-buildTypeInstance tyConName varTysOrig tyVarBndrs variant = do
+  -> ShwiftyM Type
+buildTypeInstance' tyConName varTysOrig tyVarBndrs variant = do
   -- Make sure to expand through type/kind synonyms!
   -- Otherwise, the eta-reduction check might get
   -- tripped up over type variables in a synonym
   -- that are actually dropped.
   -- (See GHC Trac #11416 for a scenario where this
   -- actually happened)
-  varTysExp <- mapM resolveTypeSynonyms varTysOrig
+  varTysExp <- lift $ mapM resolveTypeSynonyms varTysOrig
 
   starKindStats :: [KindStatus] <- foldlM
     (\stats ty -> case canRealiseKindStar ty of
       NotKindStar -> do
-        fail "encountered kind variable that cannot be realised to kind *"
+        throwError $ KindVariableCannotBeRealised ty
       s -> pure (stats ++ [s])
     ) [] varTysExp
 
@@ -601,8 +634,7 @@ buildTypeInstance tyConName varTysOrig tyVarBndrs variant = do
       instanceType = AppT (ConT ''Swift)
         $ applyTyCon tyConName varTysOrigSubst'
 
--- [TyVarBndrQ] -> CxtQ -> TypeQ -> TypeQ
-  forallT
+  lift $ forallT
     (map tyVarBndrNoSig tyVarBndrs)
     (pure []) --instanceCxt)
     (pure instanceType)
