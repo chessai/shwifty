@@ -803,7 +803,7 @@ unapplyTy = NE.reverse . go
 --             ]
 --         ]
 --     , Rose (ConT Maybe)
---         [ Rose (VarT a)
+--         [ Rose (VarT b)
 --             [
 --             ]
 --         ]
