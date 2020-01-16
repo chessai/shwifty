@@ -23,7 +23,6 @@
   , TypeApplications
   , TypeFamilies
   , ViewPatterns
-  , QuantifiedConstraints
 #-}
 
 {-# options_ghc
@@ -1053,9 +1052,9 @@ buildTypeInstance tyConName cls varTysOrig tyVarBndrs variant = do
         NewtypeInstance -> True
 
       -- if we are working on a data family
-      -- or newtype family, we need to peel off kinds.
-      --
-      -- i'm not sure why.
+      -- or newtype family, we need to peel off
+      -- the kinds. See Note [Kind signatures in
+      -- derived instances]
       varTysOrigSubst' :: [Type]
       varTysOrigSubst' = if isDataFamily
         then varTysOrigSubst
@@ -1188,14 +1187,8 @@ stringE = LitE . StringL
 -- the implementation is much simpler - just
 -- an application.
 --
--- Note the use of unSigT - this is because
--- it's very easy to give the wrong kind
--- annotation. I don't know why, I think it
--- has to do with having fields with polykinded
--- type variables which GHC can't unify
--- with the parent type's. Better to let
--- the kind inference just do its thing, which
--- works great.
+-- Note the use of unSigT - see Note
+-- [Kind signatures in derived instances].
 toSwiftECxt :: Type -> Exp
 toSwiftECxt (unSigT -> typ) = AppE
   (VarE 'toSwift)
@@ -1309,3 +1302,36 @@ unapplyTy = NE.reverse . go
 data Rose a = Rose a [Rose a]
   deriving stock (Eq, Show)
   deriving stock (Functor,Foldable,Traversable)
+
+{-
+Note [Kind signatures in derived instances]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+It is possible to put explicit kind signatures into the derived instances, e.g.,
+
+  instance C a => C (Data (f :: * -> *)) where ...
+
+But it is preferable to avoid this if possible. If we come up with an incorrect
+kind signature (which is entirely possible, since Template Haskell doesn't always
+have the best track record with reifying kind signatures), then GHC will flat-out
+reject the instance, which is quite unfortunate.
+
+Plain old datatypes have the advantage that you can avoid using any kind signatures
+at all in their instances. This is because a datatype declaration uses all type
+variables, so the types that we use in a derived instance uniquely determine their
+kinds. As long as we plug in the right types, the kind inferencer can do the rest
+of the work. For this reason, we use unSigT to remove all kind signatures before
+splicing in the instance context and head.
+
+Data family instances are trickier, since a data family can have two instances that
+are distinguished by kind alone, e.g.,
+
+  data family Fam (a :: k)
+  data instance Fam (a :: * -> *)
+  data instance Fam (a :: *)
+
+If we dropped the kind signatures for C (Fam a), then GHC will have no way of
+knowing which instance we are talking about. To avoid this scenario, we always
+include explicit kind signatures in data family instances. There is a chance that
+the inferred kind signatures will be incorrect, in which case we have to write the instance manually.
+-}
