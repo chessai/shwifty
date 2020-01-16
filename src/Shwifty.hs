@@ -773,13 +773,11 @@ prettyTyVarBndrStr = \case
     go = TS.unpack . head . TS.splitOn "_" . last . TS.splitOn "." . TS.pack . show
 
 -- prettify the type and kind.
--- we only care about 'SigT' because
--- this will only be used on types
--- with bad kinds.
 prettyKindVar :: Type -> (String, String)
 prettyKindVar = \case
   SigT typ k -> (go typ, go k)
-  _ -> error "Shwifty.prettyKindVar: used on a type without a kind signature"
+  VarT n -> (nameStr n, "*")
+  typ -> error $ "Shwifty.prettyKindVar: used on a type without a kind signature. Type was: " ++ show typ
   where
     go = TS.unpack . head . TS.splitOn "_" . last . TS.splitOn "." . TS.pack . show . ppr
 
