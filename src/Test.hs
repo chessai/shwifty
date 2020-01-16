@@ -83,12 +83,12 @@ data CommonPrefix = CommonPrefix
   { commonPrefixA :: Int
   , commonPrefixB :: Int
   }
-$(getShwiftyWith (defaultOptions { fieldLabelModifier = drop 12 }) ''CommonPrefix)
+$(getShwiftyWith (defaultOptions { fieldLabelModifier = drop 12, dataProtocols = [Codable, Hashable, Equatable] }) ''CommonPrefix)
 
 data CommonPrefixSum
   = CommonPrefixSum1
   | CommonPrefixSum2
-$(getShwiftyWith (defaultOptions { fieldLabelModifier = drop 12 }) ''CommonPrefixSum)
+$(getShwiftyWith (defaultOptions { fieldLabelModifier = drop 12, dataProtocols = [Hashable] }) ''CommonPrefixSum)
 
 test :: IO ()
 test = do

@@ -59,6 +59,7 @@ module Shwifty
   , indent
   , generateToSwift
   , generateToSwiftData
+  , dataProtocols
     -- ** Default 'Options'
   , defaultOptions
 
@@ -221,6 +222,7 @@ data Protocol
   | Comparable
     -- ^ The 'Comparable' protocol.
     --   See https://developer.apple.com/documentation/swift/hashable
+  deriving stock (Eq, Show)
 
 -- | Options that specify how to
 --   encode your 'SwiftData' to a swift type.
@@ -258,6 +260,9 @@ data Options = Options
     --   or the instance exists elsewhere.
     --   The default is 'True', i.e., to generate
     --   the instance.
+  , dataProtocols :: [Protocol]
+    -- ^ Protocols to add to a type.
+    --   The default ('[]') will add none.
   }
 
 -- | The default 'Options'.
@@ -271,6 +276,7 @@ data Options = Options
 --   , indent = 4
 --   , generateToSwift = True
 --   , generateToSwiftData = True
+--   , dataProtocols = []
 --   }
 -- @
 --
@@ -282,6 +288,7 @@ defaultOptions = Options
   , indent = 4
   , generateToSwift = True
   , generateToSwiftData = True
+  , dataProtocols = []
   }
 
 -- | The class for things which can be converted to
@@ -405,6 +412,11 @@ prettyTy = \case
     ++ intercalate ", " (map prettyTy tys)
     ++ ">"
 
+prettyProtocols :: [Protocol] -> String
+prettyProtocols = \case
+  [] -> ""
+  ps -> ": " ++ intercalate ", " (map show ps)
+
 -- | Pretty-print a 'SwiftData'.
 prettySwiftData :: SwiftData -> String
 prettySwiftData = prettySwiftDataWith defaultOptions
@@ -414,17 +426,35 @@ prettySwiftData = prettySwiftDataWith defaultOptions
 prettySwiftDataWith :: Options -> SwiftData -> String
 prettySwiftDataWith Options{indent} = \case
 
-  SwiftEnum {name,tyVars,cases} -> []
-    ++ "enum " ++ prettyTypeHeader name tyVars ++ " {\n"
+  SwiftEnum {name,tyVars,protocols,cases} -> []
+    ++ "enum "
+    ++ prettyTypeHeader name tyVars
+    ++ prettyProtocols protocols
+    ++ " {\n"
     ++ go cases
     ++ "}"
     where
       go [] = ""
-      go ((caseNm, []):xs) = indents ++ "case " ++ caseNm ++ "\n" ++ go xs
-      go ((caseNm, cs):xs) = indents ++ "case " ++ caseNm ++ "(" ++ (intercalate ", " (map (uncurry labelCase) cs)) ++ ")\n" ++ go xs
+      go ((caseNm, []):xs) = []
+        ++ indents
+        ++ "case "
+        ++ caseNm
+        ++ "\n"
+        ++ go xs
+      go ((caseNm, cs):xs) = []
+        ++ indents
+        ++ "case "
+        ++ caseNm
+        ++ "("
+        ++ (intercalate ", " (map (uncurry labelCase) cs))
+        ++ ")\n"
+        ++ go xs
 
-  SwiftStruct {name,tyVars,fields} -> []
-    ++ "struct " ++ prettyTypeHeader name tyVars ++ " {\n"
+  SwiftStruct {name,tyVars,protocols,fields} -> []
+    ++ "struct "
+    ++ prettyTypeHeader name tyVars
+    ++ prettyProtocols protocols
+    ++ " {\n"
     ++ go fields
     ++ "}"
     where
@@ -750,7 +780,7 @@ consToSwift :: ()
   -> [ConstructorInfo]
      -- ^ constructors
   -> ShwiftyM Exp
-consToSwift o parentName instTys = \case
+consToSwift o@Options{dataProtocols} parentName instTys = \case
   [] -> do
     throwError $ VoidType parentName
   cons -> do
@@ -762,9 +792,11 @@ consToSwift o parentName instTys = \case
       -- bad name
       matchesWorker :: ShwiftyM [Q Match]
       matchesWorker = case cons of
-        [con] -> ((:[]) . pure) <$> mkProd o instTys con
+        [con] -> do
+          ((:[]) . pure) <$> mkProd o instTys con
         _ -> do
           let tyVars = prettyTyVars instTys
+          let protos = map (ConE . mkName . show) dataProtocols
           cases <- forM cons (liftEither . mkCase o)
           pure $ (:[]) $ match
             (conP 'Proxy [])
@@ -773,7 +805,7 @@ consToSwift o parentName instTys = \case
                $ RecConE 'SwiftEnum
                $ [ (mkName "name", unqualName parentName)
                  , (mkName "tyVars", tyVars)
-                 , (mkName "protocols", ListE [])
+                 , (mkName "protocols", ListE protos)
                  , (mkName "cases", ListE cases)
                  ]
             )
@@ -830,7 +862,7 @@ mkLabel Options{fieldLabelModifier} = AppE (ConE 'Just)
   . show
 
 mkProd :: Options -> [Type] -> ConstructorInfo -> ShwiftyM Match
-mkProd o instTys = \case
+mkProd o@Options{dataProtocols} instTys = \case
   -- single constructor, no fields
   ConstructorInfo
     { constructorVariant = NormalConstructor
@@ -838,6 +870,7 @@ mkProd o instTys = \case
     , ..
     } -> do
       let tyVars = prettyTyVars instTys
+      let protos = map (ConE . mkName . show) dataProtocols
       lift $ match
         (conP 'Proxy [])
         (normalB
@@ -845,7 +878,7 @@ mkProd o instTys = \case
           $ RecConE 'SwiftStruct
           $ [ (mkName "name", unqualName constructorName)
             , (mkName "tyVars", tyVars)
-            , (mkName "protocols", ListE [])
+            , (mkName "protocols", ListE protos)
             , (mkName "fields", ListE [])
             ]
         )
@@ -868,6 +901,7 @@ mkProd o instTys = \case
     , ..
     } -> do
       let tyVars = prettyTyVars instTys
+      let protos = map (ConE . mkName . show) dataProtocols
       let fields = ListE $ zipWith (prettyField o) fieldNames constructorFields
       lift $ match
         (conP 'Proxy [])
@@ -876,7 +910,7 @@ mkProd o instTys = \case
           $ RecConE 'SwiftStruct
           $ [ (mkName "name", unqualName constructorName)
             , (mkName "tyVars", tyVars)
-            , (mkName "protocols", ListE [])
+            , (mkName "protocols", ListE protos)
             , (mkName "fields", fields)
             ]
         )
