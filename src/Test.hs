@@ -24,7 +24,7 @@ import Data.Void (Void)
 data CommonPrefixSum
   = CommonPrefixSum1
   | CommonPrefixSum2
-$(getShwiftyWith (defaultOptions { fieldLabelModifier = drop 12, dataProtocols = [Hashable], dataRawValue = Just (Array I) }) ''CommonPrefixSum)
+$(getShwiftyWith (defaultOptions { fieldLabelModifier = drop 12, dataProtocols = [Hashable], dataRawValue = Just Str }) ''CommonPrefixSum)
 
 data CommonPrefix = CommonPrefix
   { commonPrefixA :: Int
