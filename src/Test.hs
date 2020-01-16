@@ -102,7 +102,7 @@ test = do
   testPrint @CommonPrefixSum
 
 testPrint :: forall a. ToSwiftData a => IO ()
-testPrint = putStrLn $ prettySwiftData defaultOptions $ toSwiftData (Proxy @a)
+testPrint = putStrLn $ prettySwiftData $ toSwiftData (Proxy @a)
 
 --data VoidTest
 --getShwifty ''VoidTest
