@@ -453,7 +453,8 @@ prettySwiftDataWith Options{indent} = \case
     ++ "struct "
     ++ prettyTypeHeader name tyVars
     ++ prettyProtocols protocols
-    ++ " {\n"
+    ++ " {"
+    ++ (case fields of { [] -> " "; _ -> "\n" })
     ++ go fields
     ++ "}"
     where
@@ -792,7 +793,7 @@ consToSwift o@Options{dataProtocols} parentName instTys = \case
       matchesWorker :: ShwiftyM [Q Match]
       matchesWorker = case cons of
         [con] -> do
-          ((:[]) . pure) <$> mkProd o instTys con
+          ((:[]) . pure) <$> mkProd o parentName instTys con
         _ -> do
           let tyVars = prettyTyVars instTys
           let protos = map (ConE . mkName . show) dataProtocols
@@ -860,8 +861,8 @@ mkLabel Options{fieldLabelModifier} = AppE (ConE 'Just)
   . TS.pack
   . show
 
-mkProd :: Options -> [Type] -> ConstructorInfo -> ShwiftyM Match
-mkProd o@Options{dataProtocols} instTys = \case
+mkProd :: Options -> Name -> [Type] -> ConstructorInfo -> ShwiftyM Match
+mkProd o@Options{dataProtocols} typName instTys = \case
   -- single constructor, no fields
   ConstructorInfo
     { constructorVariant = NormalConstructor
@@ -875,7 +876,7 @@ mkProd o@Options{dataProtocols} instTys = \case
         (normalB
           $ pure
           $ RecConE 'SwiftStruct
-          $ [ (mkName "name", unqualName constructorName)
+          $ [ (mkName "name", unqualName typName)
             , (mkName "tyVars", tyVars)
             , (mkName "protocols", ListE protos)
             , (mkName "fields", ListE [])
@@ -907,7 +908,7 @@ mkProd o@Options{dataProtocols} instTys = \case
         (normalB
           $ pure
           $ RecConE 'SwiftStruct
-          $ [ (mkName "name", unqualName constructorName)
+          $ [ (mkName "name", unqualName typName)
             , (mkName "tyVars", tyVars)
             , (mkName "protocols", ListE protos)
             , (mkName "fields", fields)

@@ -98,6 +98,7 @@ test = do
   testPrint @(K X)
   testPrint @(Z X X)
   testPrint @(L X X)
+  testPrint @(M X)
   testPrint @CommonPrefix
   testPrint @CommonPrefixSum
 
