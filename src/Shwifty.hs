@@ -30,6 +30,11 @@
   -Wall
 #-}
 
+-- | The Shwifty library allows generation of
+--   Swift types (structs and enums) from Haskell
+--   ADTs, using Template Haskell. The main
+--   entry point to the library should be
+--   'getShwifty'.
 module Shwifty
   ( -- * Classes for conversion
     ToSwift(..)
@@ -88,6 +93,7 @@ import qualified Data.Map.Strict as M
 import qualified Data.Text as TS
 import qualified Data.Text.Lazy as TL
 
+-- | An AST representing a Swift type.
 data Ty
   = Unit
     -- ^ Unit (Unit/Void in swift). Empty struct type.
@@ -143,7 +149,9 @@ data Ty
     -- ^ polymorphic type variable
   | Concrete
       { name :: String
+        -- ^ the name of the type
       , tyVars :: [Ty]
+        -- ^ the type's type variables
       }
     -- ^ a concrete type variable, and its
     --   type variables. Will typically be generated
@@ -152,22 +160,42 @@ data Ty
 -- | A Swift datatype, either a struct (product type)
 --   or enum (sum type). Haskll types are
 --   sums-of-products, so the way we differentiate
+--   when doing codegen,
 --   is that types with a single constructor
 --   will be converted to a struct, and those with
 --   two or more constructors will be converted to an
---   enum.
+--   enum. Types with 0 constructors
+--   (such as Haskell's 'Void') are not allowed.
+--
+--   /Note/: There seems to be a haddock bug related
+--   to `-XDuplicateRecordFields` which
+--   causes the haddocks for the fields of 'SwiftEnum'
+--   to refer to struct.
 data SwiftData
   = SwiftStruct
       { name :: String
+        -- ^ The name of the struct
       , tyVars :: [String]
+        -- ^ The struct's type variables
       , protocols :: [Protocol]
+        -- ^ The protocols which the struct
+        --   implements
       , fields :: [(String, Ty)]
+        -- ^ The fields of the struct. the pair
+        --   is interpreted as (name, type).
       }
   | SwiftEnum
       { name :: String
+        -- ^ The name of the enum
       , tyVars :: [String]
+        -- ^ The enum's type variables
       , protocols :: [Protocol]
+        -- ^ The protocols which the enum
+        --   implements
       , cases :: [(String, [(Maybe String, Ty)])]
+        -- ^ The cases of the enum. the type
+        --   can be interpreted as
+        --   (name, [(label, type)]).
       }
 
 -- | The class for things which can be converted to
@@ -178,7 +206,8 @@ data SwiftData
 class ToSwiftData a where
   toSwiftData :: Proxy a -> SwiftData
 
--- Swift protocols.
+-- | Swift protocols.
+--   Only a few are supported right now.
 data Protocol
   = Hashable
     -- ^ The 'Hashable' protocol.
@@ -270,7 +299,8 @@ instance KnownSymbol x => ToSwift (SingSymbol x) where
 -- | A filler type to be used when pretty-printing.
 --   The codegen used by shwifty doesn't look at
 --   at what a type's type variables are instantiated
---   to, but the type's top-level definition. However,
+--   to, but rather at the type's top-level
+--   definition. However,
 --   to make GHC happy, you will have to fill in type
 --   variables with unused types. To get around this,
 --   you could also use something like
@@ -409,9 +439,121 @@ ensureEnabled ext = do
   unless enabled $ do
     throwError $ ExtensionNotEnabled ext
 
+-- | Generate 'ToSwiftData' and 'ToSwift' instances
+--   for your type. 'ToSwift' instances are typically
+--   used to build cases or fields, whereas
+--   'ToSwiftData' instances are for building structs
+--   and enums. Click the 'Examples' button to see
+--   examples of what Swift gets generated in
+--   different scenarios. To get access to the
+--   generated code, you will have to use one of
+--   the pretty-printing functions provided.
+--
+-- === __Examples__
+--
+-- > -- A simple sum type
+-- > data SumType = Sum1 | Sum2 | Sum3
+-- > getShwifty ''SumType
+--
+-- @
+-- enum SumType {
+--     case sum1
+--     case sum2
+--     case sum3
+-- }
+-- @
+--
+-- > -- A simple product type
+-- > data ProductType = ProductType { x :: Int, y :: Int }
+-- > getShwifty ''ProductType
+--
+-- @
+-- struct ProductType {
+--     let x: Int
+--     let y: Int
+-- }
+-- @
+--
+-- > -- A sum type with type variables
+-- > data SumType a b = SumL a | SumR b
+-- > getShwifty ''SumType
+--
+-- @
+-- enum SumType\<A, B\> {
+--     case sumL(A)
+--     case sumR(B)
+-- }
+-- @
+--
+-- > -- A product type with type variables
+-- > data ProductType a b = ProductType { aField :: a, bField :: b }
+-- > getShwifty ''ProductType
+--
+-- @
+-- struct ProductType\<A, B\> {
+--     let aField: A
+--     let bField: B
+-- }
+-- @
+--
+-- > -- A newtype
+-- > newtype Newtype a = Newtype { getNewtype :: a }
+-- > getShwifty ''Newtype
+--
+-- @
+-- struct Newtype\<A\> {
+--     let getNewtype: A
+-- }
+-- @
+--
+-- > -- A type with a function field
+-- > newtype Endo a = Endo { appEndo :: a -> a }
+-- > getShwifty ''Endo
+--
+-- @
+-- struct Endo\<A\> {
+--     let appEndo: ((A) -> A)
+-- }
+-- @
+--
+-- > -- A weird type with nested fields. Also note the Result's types being flipped from that of the Either.
+-- > data YouveGotProblems a b = YouveGotProblems { field1 :: Maybe (Maybe (Maybe a)), field2 :: Either (Maybe a) (Maybe b) }
+-- > getShwifty ''YouveGotProblems
+--
+-- @
+-- struct YouveGotProblems\<A, B\> {
+--     let field1: Option\<Option\<Option\<A\>\>\>
+--     let field2: Result\<Option\<B\>,Option\<A\>\>
+-- }
+-- @
+--
+-- > -- A type with polykinded type variables
+-- > data PolyKinded (a :: k) = PolyKinded
+-- > getShwifty ''PolyKinded
+--
+-- @
+-- struct PolyKinded\<A\> {
+-- }
+-- @
+--
+-- > -- A sum type where constructors might be records
+-- > data SumType a b (c :: k) = Sum1 Int a (Maybe b) | Sum2 b | Sum3 { x :: Int, y :: Int }
+-- > getShwifty ''SumType
+--
+-- @
+-- enum SumType\<A, B, C\> {
+--   case field1(Int, A, Optional\<B\>)
+--   case field2(B)
+--   case field3(_ x: Int, _ y: Int)
+-- }
+-- @
 getShwifty :: Name -> Q [Dec]
 getShwifty = getShwiftyWith defaultOptions
 
+-- | Like 'getShwifty', but lets you supply
+--   your own 'Options'. Usage:
+--
+-- @$(getShwiftyWith myOptions ''MyType)@
 getShwiftyWith :: Options -> Name -> Q [Dec]
 getShwiftyWith o@Options{generateToSwift,generateToSwiftData} name = do
   r <- runExceptT $ do
@@ -469,7 +611,7 @@ noExistentials cs = forM_ cs $ \ConstructorInfo{..} ->
 
 data ShwiftyError
   = VoidType
-      { _conName :: Name
+      { _typName :: Name
       }
   | SingleConNonRecord
       { _conName :: Name
@@ -1018,7 +1160,7 @@ toSwiftECxt (unSigT -> typ) = AppE
 -- get the original type. the 'Swift' instance for
 -- 'SingSymbol' gets us where we need to go.
 --
--- Note that @'compress' '.' 'decompress'@ is not
+-- Note that @compress . decompress@ is not
 -- actually equivalent to the identity function on
 -- Type because of ForallT, where we discard some
 -- context. However, for any types we care about,
@@ -1066,14 +1208,14 @@ unapplyTy = NE.reverse . go
       ForallT _ _ t -> go t
       t -> t :| []
 
--- | Types can be 'stretched' out into a Rose tree.
---   'decompress' will stretch a type out completely,
+-- | Types can be stretched out into a Rose tree.
+--   decompress will stretch a type out completely,
 --   in such a way that it cannot be stretched out
---   further. 'compress' will reconstruct a type from
+--   further. compress will reconstruct a type from
 --   its stretched form.
 --
 --   Also note that this is equivalent to
---   @'Cofree' 'NonEmpty' 'Type'@.
+--   Cofree NonEmpty Type.
 --
 --   Examples:
 --
