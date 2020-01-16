@@ -107,8 +107,7 @@ getShwifty ''PolyKinded
 ```
 
 ```swift
-struct PolyKinded<A> {
-}
+struct PolyKinded<A> { }
 ```
 
 #### A sum type where constructors might be records
