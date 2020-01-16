@@ -5,6 +5,7 @@
   , DataKinds
   , DeriveFoldable
   , DeriveFunctor
+  , DeriveGeneric
   , DeriveTraversable
   , DerivingStrategies
   , DuplicateRecordFields
@@ -59,6 +60,7 @@ module Shwifty
   , generateToSwift
   , generateToSwiftData
   , dataProtocols
+  , dataRawValue
     -- ** Default 'Options'
   , defaultOptions
 
@@ -82,6 +84,7 @@ import Data.Maybe (mapMaybe, catMaybes)
 import Data.Proxy (Proxy(..))
 import Data.Word (Word8,Word16,Word32,Word64)
 import Data.Void (Void)
+import GHC.Generics (Generic)
 import GHC.TypeLits (Symbol, KnownSymbol, symbolVal)
 import Language.Haskell.TH hiding (stringE)
 import Language.Haskell.TH.Datatype
@@ -156,6 +159,7 @@ data Ty
     -- ^ a concrete type variable, and its
     --   type variables. Will typically be generated
     --   by 'getShwifty'.
+  deriving stock (Eq, Show, Read, Generic)
 
 -- | A Swift datatype, either a struct (product type)
 --   or enum (sum type). Haskll types are
@@ -196,6 +200,16 @@ data SwiftData
         -- ^ The cases of the enum. the type
         --   can be interpreted as
         --   (name, [(label, type)]).
+      , rawValue :: Maybe Ty
+        -- ^ The rawValue of an enum. See
+        --   https://developer.apple.com/documentation/swift/rawrepresentable/1540698-rawvalue
+        --
+        --   Typically the 'Ty' will be
+        --   'I' or 'Str'.
+        --
+        --   /Note/: Currently, nothing will prevent
+        --   you from putting something
+        --   nonsensical here.
       }
 
 -- | The class for things which can be converted to
@@ -264,6 +278,20 @@ data Options = Options
   , dataProtocols :: [Protocol]
     -- ^ Protocols to add to a type.
     --   The default ('[]') will add none.
+  , dataRawValue :: Maybe Ty
+    -- ^ The rawValue of an enum. See
+    --   https://developer.apple.com/documentation/swift/rawrepresentable/1540698-rawvalue
+    --
+    --   The default ('Nothing') will not
+    --   include any rawValue.
+    --
+    --   Typically, if the type does have
+    --   a rawValue', the 'Ty' will be
+    --   'I' or 'Str'.
+    --
+    --   /Note/: Currently, nothing will prevent
+    --   you from putting something
+    --   nonsensical here.
   }
 
 -- | The default 'Options'.
@@ -278,6 +306,7 @@ data Options = Options
 --   , generateToSwift = True
 --   , generateToSwiftData = True
 --   , dataProtocols = []
+--   , dataRawValue = Nothing
 --   }
 -- @
 --
@@ -290,6 +319,7 @@ defaultOptions = Options
   , generateToSwift = True
   , generateToSwiftData = True
   , dataProtocols = []
+  , dataRawValue = Nothing
   }
 
 -- | The class for things which can be converted to
@@ -413,6 +443,11 @@ prettyTy = \case
     ++ intercalate ", " (map prettyTy tys)
     ++ ">"
 
+prettyRawValueAndProtocols :: Maybe Ty -> [Protocol] -> String
+prettyRawValueAndProtocols Nothing ps = prettyProtocols ps
+prettyRawValueAndProtocols (Just ty) [] = ": " ++ prettyTy ty
+prettyRawValueAndProtocols (Just ty) ps = ": " ++ prettyTy ty ++ ", " ++ intercalate ", " (map show ps)
+
 prettyProtocols :: [Protocol] -> String
 prettyProtocols = \case
   [] -> ""
@@ -427,10 +462,10 @@ prettySwiftData = prettySwiftDataWith defaultOptions
 prettySwiftDataWith :: Options -> SwiftData -> String
 prettySwiftDataWith Options{indent} = \case
 
-  SwiftEnum {name,tyVars,protocols,cases} -> []
+  SwiftEnum {name,tyVars,protocols,cases,rawValue} -> []
     ++ "enum "
     ++ prettyTypeHeader name tyVars
-    ++ prettyProtocols protocols
+    ++ prettyRawValueAndProtocols rawValue protocols
     ++ " {\n"
     ++ go cases
     ++ "}"
@@ -772,6 +807,44 @@ typToSwift parentName instTys = do
       )
       []
   lift $ lamE [varP value] (caseE (varE value) matches)
+
+rawValueE :: Maybe Ty -> Exp
+rawValueE = \case
+  Nothing -> ConE 'Nothing
+  Just ty -> AppE (ConE 'Just) (ParensE (tyE ty))
+
+-- god this is annoying. write a cleaner
+-- version of this
+tyE :: Ty -> Exp
+tyE = \case
+  Unit -> ConE 'Unit
+  Character -> ConE 'Character
+  Str -> ConE 'Str
+  I -> ConE 'I
+  I8 -> ConE 'I8
+  I16 -> ConE 'I16
+  I32 -> ConE 'I32
+  I64 -> ConE 'I64
+  U -> ConE 'U
+  U8 -> ConE 'U8
+  U16 -> ConE 'U16
+  U32 -> ConE 'U32
+  U64 -> ConE 'U64
+  F32 -> ConE 'F32
+  F64 -> ConE 'F64
+  Decimal -> ConE 'Decimal
+  BigSInt32 -> ConE 'BigSInt32
+  BigSInt64 -> ConE 'BigSInt64
+  Poly s -> AppE (ConE 'Poly) (stringE s)
+  Concrete tyCon tyVars -> AppE (AppE (ConE 'Concrete) (stringE tyCon)) (ListE (map tyE tyVars))
+  Tuple2 e1 e2 -> AppE (AppE (ConE 'Tuple2) (tyE e1)) (tyE e2)
+  Tuple3 e1 e2 e3 -> AppE (AppE (AppE (ConE 'Tuple3) (tyE e1)) (tyE e2)) (tyE e3)
+  Optional e -> AppE (ConE 'Optional) (tyE e)
+  Result e1 e2 -> AppE (AppE (ConE 'Result) (tyE e1)) (tyE e2)
+  Dictionary e1 e2 -> AppE (AppE (ConE 'Dictionary) (tyE e1)) (tyE e2)
+  App e1 e2 -> AppE (AppE (ConE 'App) (tyE e1)) (tyE e2)
+  Array e -> AppE (ConE 'Array) (tyE e)
+
 consToSwift :: ()
   => Options
      -- ^ options about how to encode things
@@ -782,7 +855,7 @@ consToSwift :: ()
   -> [ConstructorInfo]
      -- ^ constructors
   -> ShwiftyM Exp
-consToSwift o@Options{dataProtocols} parentName instTys = \case
+consToSwift o@Options{dataProtocols,dataRawValue} parentName instTys = \case
   [] -> do
     throwError $ VoidType parentName
   cons -> do
@@ -799,6 +872,7 @@ consToSwift o@Options{dataProtocols} parentName instTys = \case
         _ -> do
           let tyVars = prettyTyVars instTys
           let protos = map (ConE . mkName . show) dataProtocols
+          let raw = rawValueE dataRawValue
           cases <- forM cons (liftEither . mkCase o)
           pure $ (:[]) $ match
             (conP 'Proxy [])
@@ -809,6 +883,7 @@ consToSwift o@Options{dataProtocols} parentName instTys = \case
                  , (mkName "tyVars", tyVars)
                  , (mkName "protocols", ListE protos)
                  , (mkName "cases", ListE cases)
+                 , (mkName "rawValue", raw)
                  ]
             )
             []
