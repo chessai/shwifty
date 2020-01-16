@@ -95,8 +95,8 @@ getShwifty ''YouveGotProblems
 
 ```swift
 struct YouveGotProblems<A, B> {
-    let field1: Option<Option<Option<A>>>
-    let field2: Result<Option<B>,Option<A>>
+    let field1: A???
+    let field2: Result<B?, A?>
 }
 ```
 
@@ -121,7 +121,7 @@ getShwifty ''SumType
 
 ```swift
 enum SumType<A, B, C> {
-  case field1(Int, A, Optional<B>)
+  case field1(Int, A, B?)
   case field2(B)
   case field3(_ x: Int, _ y: Int)
 }

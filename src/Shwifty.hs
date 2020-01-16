@@ -54,7 +54,7 @@ module Shwifty
     -- ** Actual Options
   , fieldLabelModifier
   , constructorModifier
-  , optionalTruncate
+  , optionalExpand
   , indent
   , generateToSwift
   , generateToSwiftData
@@ -237,11 +237,13 @@ data Options = Options
   , constructorModifier :: String -> String
     -- ^ Function applied to constructor names.
     --   The default ('id') makes no changes.
-  , optionalTruncate :: Bool
+  , optionalExpand :: Bool
     -- ^ Whether or not to truncate Optional types.
-    --   Normally, an Optional ('Maybe') is encoded as "Optional<A>",
-    --   but in Swift it is valid to have "A?" (\'?\' appended to the
-    --   type). The default ('False') is the verbose option.
+    --   Normally, an Optional ('Maybe') is encoded
+    --   as "A?", which is syntactic sugar for
+    --   "Optional<A>". The default value ('False')
+    --   will keep it as sugar. A value of 'True'
+    --   will expand it to be desugared.
   , indent :: Int
     -- ^ Number of spaces to indent field names
     --   and cases. The default is 4.
@@ -271,7 +273,7 @@ data Options = Options
 -- defaultOptions = Options
 --   { fieldLabelModifier = id
 --   , constructorModifier = id
---   , optionalTruncate = False
+--   , optionalExpand= False
 --   , indent = 4
 --   , generateToSwift = True
 --   , generateToSwiftData = True
@@ -283,7 +285,7 @@ defaultOptions :: Options
 defaultOptions = Options
   { fieldLabelModifier = id
   , constructorModifier = id
-  , optionalTruncate = False
+  , optionalExpand = False
   , indent = 4
   , generateToSwift = True
   , generateToSwiftData = True
@@ -385,7 +387,7 @@ prettyTy = \case
   Character -> "Character"
   Tuple2 e1 e2 -> "(" ++ prettyTy e1 ++ ", " ++ prettyTy e2 ++ ")"
   Tuple3 e1 e2 e3 -> "(" ++ prettyTy e1 ++ ", " ++ prettyTy e2 ++ ", " ++ prettyTy e3 ++ ")"
-  Optional e -> "Optional<" ++ prettyTy e ++ ">"
+  Optional e -> prettyTy e ++ "?"
   Result e1 e2 -> "Result<" ++ prettyTy e1 ++ ", " ++ prettyTy e2 ++ ">"
   Dictionary e1 e2 -> "Dictionary<" ++ prettyTy e1 ++ ", " ++ prettyTy e2 ++ ">"
   Array e -> "Array<" ++ prettyTy e ++ ">"
