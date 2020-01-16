@@ -1,10 +1,16 @@
-{-# language TemplateHaskell #-}
-{-# language ScopedTypeVariables, DataKinds #-}
-{-# language KindSignatures, PolyKinds, GADTs #-}
-{-# language TypeApplications #-}
-{-# language DuplicateRecordFields #-}
--- {-# language EmptyCase, GADTs, DataKinds, PolyKinds, KindSignatures,
---   ScopedTypeVariables, DuplicateRecordFields, TypeApplications #-}
+{-# language
+    AllowAmbiguousTypes
+  , TemplateHaskell
+  , ScopedTypeVariables
+  , DataKinds
+  , KindSignatures
+  , PolyKinds
+  , GADTs
+  , TypeApplications
+  , DuplicateRecordFields
+  , TypeFamilies
+  , QuantifiedConstraints
+#-}
 
 --{-# options_ghc -ddump-splices #-}
 
@@ -15,6 +21,31 @@ import Data.Proxy
 import Data.Kind (Type)
 import Data.Void (Void)
 
+data TreeType a = TreeType
+  { treeTypeField :: Either
+      ( Either String
+        ( Either String (Maybe a)
+        )
+      )
+      ( Either String
+        ( Either String (Maybe a)
+        )
+      )
+  }
+getShwifty ''TreeType
+
+data Sum = Sum1 | Sum2 | Sum3 | Sum4
+getShwifty ''Sum
+
+newtype Endo a = Endo { appEndo :: a -> a }
+getShwifty ''Endo
+
+newtype N a = N { getN :: a }
+getShwifty ''N
+
+data K a = K { getK :: a, getInt :: Int }
+getShwifty ''K
+
 data M (a :: k) = MkM
 getShwifty ''M
 
@@ -24,15 +55,12 @@ data OneTyVar a = OneTyVar
   }
 getShwifty ''OneTyVar
 
-data K a = K { getK :: a, getInt :: Int }
-getShwifty ''K
-
 data Z a b = Z { x :: Maybe a, b :: Maybe (Maybe b) }
 getShwifty ''Z
 
 data L a b = L
   { l0 :: Int
-  , l1 :: (a,b)
+  , l1 :: (a,b,b)
   , l2 :: [a]
   , l3 :: [b]
   }
@@ -47,21 +75,34 @@ getShwifty ''Foo
 data Contains a = Contains
   { m1 :: M Int
   , m2 :: M a
-  , m3 :: Foo a a a
+  , m3 :: Foo (a -> Int) a Int
   }
 getShwifty ''Contains
 
+data CommonPrefix = CommonPrefix
+  { commonPrefixA :: Int
+  , commonPrefixB :: Int
+  }
+$(getShwiftyWith (defaultOptions { fieldLabelModifier = drop 12 }) ''CommonPrefix)
+
+data CommonPrefixSum
+  = CommonPrefixSum1
+  | CommonPrefixSum2
+$(getShwiftyWith (defaultOptions { fieldLabelModifier = drop 12 }) ''CommonPrefixSum)
+
 test :: IO ()
 test = do
-  let testPrint :: ToSwiftData a => Proxy a -> IO ()
-      testPrint = putStrLn . prettySwiftData . toSwiftData
-  pure ()
-  testPrint $ Proxy @(Contains X)
-  testPrint $ Proxy @(Foo X X X)
-  testPrint $ Proxy @(OneTyVar X)
-  testPrint $ Proxy @(K X)
-  testPrint $ Proxy @(Z X X)
-  testPrint $ Proxy @(L X X)
+  testPrint @(Contains X)
+  testPrint @(Foo X X X)
+  testPrint @(OneTyVar X)
+  testPrint @(K X)
+  testPrint @(Z X X)
+  testPrint @(L X X)
+  testPrint @CommonPrefix
+  testPrint @CommonPrefixSum
+
+testPrint :: forall a. ToSwiftData a => IO ()
+testPrint = putStrLn $ prettySwiftData defaultOptions $ toSwiftData (Proxy @a)
 
 --data VoidTest
 --getShwifty ''VoidTest
