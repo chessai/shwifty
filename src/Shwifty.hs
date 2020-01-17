@@ -75,6 +75,7 @@ module Shwifty
 #include "MachDeps.h"
 
 import Control.Monad.Except
+import Data.CaseInsensitive (CI)
 import Data.Foldable (foldlM,foldr',foldl')
 import Data.Functor ((<&>))
 import Data.Int (Int8,Int16,Int32,Int64)
@@ -405,6 +406,8 @@ instance ToSwift TS.Text where toSwift = const Str
 
 instance ToSwift BL.ByteString where toSwift = const Str
 instance ToSwift BS.ByteString where toSwift = const Str
+
+instance ToSwift (CI s) where toSwift = const Str
 
 instance forall k v. (ToSwift k, ToSwift v) => ToSwift (M.Map k v) where toSwift = const (Dictionary (toSwift (Proxy @k)) (toSwift (Proxy @v)))
 
