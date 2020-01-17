@@ -477,6 +477,7 @@ prettyTy = \case
   BigSInt32 -> "BigSInt32"
   BigSInt64 -> "BigSInt64"
   Poly ty -> ty
+  Concrete ty [] -> ty
   Concrete ty tys -> ty
     ++ "<"
     ++ intercalate ", " (map prettyTy tys)
