@@ -1230,6 +1230,13 @@ data KindStatus
     -- ^ any other kind
   | IsKindVar Name
     -- ^ is actually a kind variable
+  | IsCon Name
+    -- ^ is a constructor - this will typically
+    --   happen in a data family instance, because
+    --   we often have to construct a
+    --   FlexibleInstance. our old check for
+    --   `canRealiseKindStar` didn't check for
+    --   `ConT` - where this would happen.
 
 -- can we realise the type's kind to *?
 canRealiseKindStar :: Type -> KindStatus
@@ -1237,6 +1244,7 @@ canRealiseKindStar = \case
   VarT{} -> KindStar
   SigT _ StarT -> KindStar
   SigT _ (VarT n) -> IsKindVar n
+  ConT n -> IsCon n
   _ -> NotKindStar
 
 -- discard the kind signature from a TyVarBndr.

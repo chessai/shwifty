@@ -29,6 +29,7 @@ library
     src
   exposed-modules:
     Shwifty
+    --Test
   build-depends:
     , base >= 4.11 && < 4.14
     , containers >= 0.5.9 && < 0.7

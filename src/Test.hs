@@ -10,6 +10,7 @@
   , DuplicateRecordFields
   , TypeFamilies
   , QuantifiedConstraints
+  , FlexibleInstances
 #-}
 
 {-# options_ghc -ddump-splices #-}
@@ -20,6 +21,18 @@ import Shwifty
 import Data.Proxy
 import Data.Kind (Type)
 import Data.Void (Void)
+
+class DataClass a where
+  data family Key a
+
+instance DataClass Int where
+  newtype Key Int = IntKey { unKey :: Int }
+
+getShwifty 'IntKey
+
+--newtype Key WirePurposeDocument¬
+--       1         = WirePurposeDocumentKey {unWirePurposeDocumen         tKey :: UUID}¬
+
 
 data CommonPrefixSum
   = CommonPrefixSum1
