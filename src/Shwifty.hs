@@ -92,6 +92,7 @@ import Language.Haskell.TH hiding (stringE)
 import Language.Haskell.TH.Datatype
 import Prelude hiding (Enum(..))
 import Data.UUID.Types (UUID)
+import Data.Time (UTCTime)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.Char as Char
@@ -112,20 +113,6 @@ data Ty
     -- ^ Character
   | String
     -- ^ String
-  | Tuple2 Ty Ty
-    -- ^ 2-tuple
-  | Tuple3 Ty Ty Ty
-    -- ^ 3-tuple
-  | Optional Ty
-    -- ^ Maybe type
-  | Result Ty Ty
-    -- ^ Either type
-  | Dictionary Ty Ty
-    -- ^ Dictionary type
-  | Array Ty
-    -- ^ array type
-  | App Ty Ty
-    -- ^ function type
   | I
     -- ^ signed machine integer
   | I8
@@ -158,6 +145,22 @@ data Ty
     -- ^ 64-bit big integer
   | UUID
     -- ^ UUID type
+  | Date
+    -- ^ Date
+  | Tuple2 Ty Ty
+    -- ^ 2-tuple
+  | Tuple3 Ty Ty Ty
+    -- ^ 3-tuple
+  | Optional Ty
+    -- ^ Maybe type
+  | Result Ty Ty
+    -- ^ Either type
+  | Dictionary Ty Ty
+    -- ^ Dictionary type
+  | Array Ty
+    -- ^ array type
+  | App Ty Ty
+    -- ^ function type
   | Poly String
     -- ^ polymorphic type variable
   | Concrete
@@ -366,6 +369,9 @@ instance ToSwift Bool where
 instance ToSwift UUID where
   toSwift = const UUID
 
+instance ToSwift UTCTime where
+  toSwift = const Date
+
 instance forall a b. (ToSwift a, ToSwift b) => ToSwift (a -> b) where
   toSwift = const (App (toSwift (Proxy @a)) (toSwift (Proxy @b)))
 
@@ -447,6 +453,7 @@ prettyTy = \case
   Bool -> "Bool"
   Character -> "Character"
   UUID -> "UUID"
+  Date -> "Date"
   Tuple2 e1 e2 -> "(" ++ prettyTy e1 ++ ", " ++ prettyTy e2 ++ ")"
   Tuple3 e1 e2 e3 -> "(" ++ prettyTy e1 ++ ", " ++ prettyTy e2 ++ ", " ++ prettyTy e3 ++ ")"
   Optional e -> prettyTy e ++ "?"
@@ -851,6 +858,7 @@ tyE = \case
   Bool -> ConE 'Bool
   Character -> ConE 'Character
   UUID -> ConE 'UUID
+  Date -> ConE 'Date
   String -> ConE 'String
   I -> ConE 'I
   I8 -> ConE 'I8
