@@ -82,17 +82,21 @@ import Data.List (intercalate)
 import Data.List.NonEmpty ((<|), NonEmpty(..))
 import Data.Maybe (mapMaybe, catMaybes)
 import Data.Proxy (Proxy(..))
-import Data.Word (Word8,Word16,Word32,Word64)
+import Data.Vector (Vector)
 import Data.Void (Void)
+import Data.Word (Word8,Word16,Word32,Word64)
 import GHC.Generics (Generic)
 import GHC.TypeLits (Symbol, KnownSymbol, symbolVal)
 import Language.Haskell.TH hiding (stringE)
 import Language.Haskell.TH.Datatype
 import Prelude hiding (Enum(..))
+import qualified Data.ByteString as BS
+import qualified Data.ByteString.Lazy as BL
 import qualified Data.Char as Char
 import qualified Data.List as L
 import qualified Data.List.NonEmpty as NE
-import qualified Data.Map.Strict as M
+import qualified Data.Map as M
+import qualified Data.HashMap.Strict as HM
 import qualified Data.Text as TS
 import qualified Data.Text.Lazy as TL
 
@@ -388,12 +392,23 @@ instance ToSwift Double where toSwift = const F64
 
 instance ToSwift Char where toSwift = const Character
 
+instance forall a. ToSwift a => ToSwift (Vector a) where
+  toSwift = const (Array (toSwift (Proxy @a)))
+
 instance {-# overlappable #-} forall a. ToSwift a => ToSwift [a] where
   toSwift = const (Array (toSwift (Proxy @a)))
 
 instance {-# overlapping #-} ToSwift [Char] where toSwift = const Str
+
 instance ToSwift TL.Text where toSwift = const Str
 instance ToSwift TS.Text where toSwift = const Str
+
+instance ToSwift BL.ByteString where toSwift = const Str
+instance ToSwift BS.ByteString where toSwift = const Str
+
+instance forall k v. (ToSwift k, ToSwift v) => ToSwift (M.Map k v) where toSwift = const (Dictionary (toSwift (Proxy @k)) (toSwift (Proxy @v)))
+
+instance forall k v. (ToSwift k, ToSwift v) => ToSwift (HM.HashMap k v) where toSwift = const (Dictionary (toSwift (Proxy @k)) (toSwift (Proxy @v)))
 
 instance forall a b. (ToSwift a, ToSwift b) => ToSwift ((,) a b) where
   toSwift = const (Tuple2 (toSwift (Proxy @a)) (toSwift (Proxy @b)))
