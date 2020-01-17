@@ -37,7 +37,7 @@ getShwifty 'IntKey
 data CommonPrefixSum
   = CommonPrefixSum1
   | CommonPrefixSum2
-$(getShwiftyWith (defaultOptions { fieldLabelModifier = drop 12, dataProtocols = [Hashable], dataRawValue = Just Str }) ''CommonPrefixSum)
+$(getShwiftyWith (defaultOptions { fieldLabelModifier = drop 12, dataProtocols = [Hashable], dataRawValue = Just String }) ''CommonPrefixSum)
 
 data CommonPrefix = CommonPrefix
   { commonPrefixA :: Int

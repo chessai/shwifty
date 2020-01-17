@@ -91,6 +91,7 @@ import GHC.TypeLits (Symbol, KnownSymbol, symbolVal)
 import Language.Haskell.TH hiding (stringE)
 import Language.Haskell.TH.Datatype
 import Prelude hiding (Enum(..))
+import Data.UUID.Types (UUID)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.Char as Char
@@ -105,9 +106,11 @@ import qualified Data.Text.Lazy as TL
 data Ty
   = Unit
     -- ^ Unit (Unit/Void in swift). Empty struct type.
+  | Bool
+    -- ^ Bool
   | Character
     -- ^ Character
-  | Str
+  | String
     -- ^ String
   | Tuple2 Ty Ty
     -- ^ 2-tuple
@@ -153,6 +156,8 @@ data Ty
     -- ^ 32-bit big integer
   | BigSInt64
     -- ^ 64-bit big integer
+  | UUID
+    -- ^ UUID type
   | Poly String
     -- ^ polymorphic type variable
   | Concrete
@@ -210,12 +215,13 @@ data SwiftData
         --   https://developer.apple.com/documentation/swift/rawrepresentable/1540698-rawvalue
         --
         --   Typically the 'Ty' will be
-        --   'I' or 'Str'.
+        --   'I' or 'String'.
         --
         --   /Note/: Currently, nothing will prevent
         --   you from putting something
         --   nonsensical here.
       }
+  deriving stock (Eq, Read, Show, Generic)
 
 -- | The class for things which can be converted to
 --   'SwiftData'.
@@ -240,7 +246,7 @@ data Protocol
   | Comparable
     -- ^ The 'Comparable' protocol.
     --   See https://developer.apple.com/documentation/swift/hashable
-  deriving stock (Eq, Show)
+  deriving stock (Eq, Read, Show, Generic)
 
 -- | Options that specify how to
 --   encode your 'SwiftData' to a swift type.
@@ -354,6 +360,12 @@ type X = Void
 instance ToSwift () where
   toSwift = const Unit
 
+instance ToSwift Bool where
+  toSwift = const Bool
+
+instance ToSwift UUID where
+  toSwift = const UUID
+
 instance forall a b. (ToSwift a, ToSwift b) => ToSwift (a -> b) where
   toSwift = const (App (toSwift (Proxy @a)) (toSwift (Proxy @b)))
 
@@ -399,15 +411,15 @@ instance forall a. ToSwift a => ToSwift (Vector a) where
 instance {-# overlappable #-} forall a. ToSwift a => ToSwift [a] where
   toSwift = const (Array (toSwift (Proxy @a)))
 
-instance {-# overlapping #-} ToSwift [Char] where toSwift = const Str
+instance {-# overlapping #-} ToSwift [Char] where toSwift = const String
 
-instance ToSwift TL.Text where toSwift = const Str
-instance ToSwift TS.Text where toSwift = const Str
+instance ToSwift TL.Text where toSwift = const String
+instance ToSwift TS.Text where toSwift = const String
 
-instance ToSwift BL.ByteString where toSwift = const Str
-instance ToSwift BS.ByteString where toSwift = const Str
+instance ToSwift BL.ByteString where toSwift = const String
+instance ToSwift BS.ByteString where toSwift = const String
 
-instance ToSwift (CI s) where toSwift = const Str
+instance ToSwift (CI s) where toSwift = const String
 
 instance forall k v. (ToSwift k, ToSwift v) => ToSwift (M.Map k v) where toSwift = const (Dictionary (toSwift (Proxy @k)) (toSwift (Proxy @v)))
 
@@ -430,9 +442,11 @@ prettyTypeHeader name tyVars = name ++ "<" ++ intercalate ", " tyVars ++ ">"
 -- | Pretty-print a 'Ty'.
 prettyTy :: Ty -> String
 prettyTy = \case
-  Str -> "String"
+  String -> "String"
   Unit -> "()"
+  Bool -> "Bool"
   Character -> "Character"
+  UUID -> "UUID"
   Tuple2 e1 e2 -> "(" ++ prettyTy e1 ++ ", " ++ prettyTy e2 ++ ")"
   Tuple3 e1 e2 e3 -> "(" ++ prettyTy e1 ++ ", " ++ prettyTy e2 ++ ", " ++ prettyTy e3 ++ ")"
   Optional e -> prettyTy e ++ "?"
@@ -834,8 +848,10 @@ rawValueE = \case
 tyE :: Ty -> Exp
 tyE = \case
   Unit -> ConE 'Unit
+  Bool -> ConE 'Bool
   Character -> ConE 'Character
-  Str -> ConE 'Str
+  UUID -> ConE 'UUID
+  String -> ConE 'String
   I -> ConE 'I
   I8 -> ConE 'I8
   I16 -> ConE 'I16
