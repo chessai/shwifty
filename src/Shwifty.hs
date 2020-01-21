@@ -257,13 +257,16 @@ data Protocol
 --   Options can be set using record syntax on
 --   'defaultOptions' with the fields below.
 data Options = Options
-  { fieldLabelModifier :: String -> String
+  { typeConstructorModifier :: String -> String
+    -- ^ Function applied to type constructor names.
+    --   The default ('id') makes no changes.
+  , fieldLabelModifier :: String -> String
     -- ^ Function applied to field labels.
     --   Handy for removing common record prefixes,
     --   for example. The default ('id') makes no
     --   changes.
   , constructorModifier :: String -> String
-    -- ^ Function applied to constructor names.
+    -- ^ Function applied to value constructor names.
     --   The default ('id') makes no changes.
   , optionalExpand :: Bool
     -- ^ Whether or not to truncate Optional types.
@@ -313,7 +316,8 @@ data Options = Options
 -- @
 -- defaultOptions :: Options
 -- defaultOptions = Options
---   { fieldLabelModifier = id
+--   { typeConstructorModifier = id
+--   , fieldLabelModifier = id
 --   , constructorModifier = id
 --   , optionalExpand= False
 --   , indent = 4
@@ -326,7 +330,8 @@ data Options = Options
 --
 defaultOptions :: Options
 defaultOptions = Options
-  { fieldLabelModifier = id
+  { typeConstructorModifier = id
+  , fieldLabelModifier = id
   , constructorModifier = id
   , optionalExpand = False
   , indent = 4
@@ -697,7 +702,7 @@ getShwiftyWith o@Options{generateToSwift,generateToSwiftData} name = do
       then do
         !instHeadData
           <- buildTypeInstance parentName ClassSwiftData instTys tyVarBndrs variant
-        clauseData <- consToSwift o parentName instTys cons
+        clauseData <- consToSwift o parentName instTys variant cons
         swiftDataInst <- lift $ instanceD
           (pure [])
           (pure instHeadData)
@@ -711,7 +716,14 @@ getShwiftyWith o@Options{generateToSwift,generateToSwiftData} name = do
       then do
         !instHeadTy
           <- buildTypeInstance parentName ClassSwift instTys tyVarBndrs variant
-        clauseTy <- typToSwift parentName instTys
+        clauseTy <- case variant of
+          NewtypeInstance -> case cons of
+            [ConstructorInfo{constructorName}] -> do
+              newtypToSwift constructorName instTys
+            _ -> do
+              throwError ExpectedNewtypeInstance
+          _ -> do
+            typToSwift parentName instTys
         swiftTyInst <- lift $ instanceD
           (pure [])
           (pure instHeadTy)
@@ -755,6 +767,7 @@ data ShwiftyError
       { _conName :: Name
       , _types :: [TyVarBndr]
       }
+  | ExpectedNewtypeInstance
 
 prettyShwiftyError :: ShwiftyError -> String
 prettyShwiftyError = \case
@@ -804,6 +817,10 @@ prettyShwiftyError = \case
     ++ " has existential type variables ("
     ++ L.intercalate ", " (map prettyTyVarBndrStr tys)
     ++ ")! Shwifty doesn't support these."
+  ExpectedNewtypeInstance -> mempty
+    ++ "Expected a newtype instance. This is an "
+    ++ "internal logic error. Please report it as a "
+    ++ "bug."
 
 prettyTyVarBndrStr :: TyVarBndr -> String
 prettyTyVarBndrStr = \case
@@ -822,6 +839,15 @@ prettyKindVar = \case
     go = TS.unpack . head . TS.splitOn "_" . last . TS.splitOn "." . TS.pack . show . ppr
 
 type ShwiftyM = ExceptT ShwiftyError Q
+
+newtypToSwift :: ()
+  => Name
+     -- ^ name of the constructor
+  -> [Type]
+     -- ^ type variables
+  -> ShwiftyM Exp
+newtypToSwift conName (stripConT -> instTys) = do
+  typToSwift conName instTys
 
 typToSwift :: ()
   => Name
@@ -893,10 +919,12 @@ consToSwift :: ()
      -- ^ name of type (used for Enums only)
   -> [Type]
      -- ^ type variables
+  -> DatatypeVariant
+     -- ^ data type variant
   -> [ConstructorInfo]
      -- ^ constructors
   -> ShwiftyM Exp
-consToSwift o@Options{dataProtocols,dataRawValue} parentName instTys = \case
+consToSwift o@Options{dataProtocols,dataRawValue} parentName instTys variant = \case
   [] -> do
     throwError $ VoidType parentName
   cons -> do
@@ -909,7 +937,11 @@ consToSwift o@Options{dataProtocols,dataRawValue} parentName instTys = \case
       matchesWorker :: ShwiftyM [Q Match]
       matchesWorker = case cons of
         [con] -> do
-          ((:[]) . pure) <$> mkProd o parentName instTys con
+          case variant of
+            NewtypeInstance -> do
+              ((:[]) . pure) <$> mkNewtypeInstance o instTys con
+            _ -> do
+              ((:[]) . pure) <$> mkProd o parentName instTys con
         _ -> do
           let tyVars = prettyTyVars instTys
           let protos = map (ConE . mkName . show) dataProtocols
@@ -978,6 +1010,30 @@ mkLabel Options{fieldLabelModifier} = AppE (ConE 'Just)
   . TS.splitOn "."
   . TS.pack
   . show
+
+mkNewtypeInstance :: Options -> [Type] -> ConstructorInfo -> ShwiftyM Match
+mkNewtypeInstance o@Options{dataProtocols} (stripConT -> instTys) = \case
+  ConstructorInfo
+    { constructorVariant = RecordConstructor [fieldName]
+    , constructorFields = [field]
+    , ..
+    } -> do
+      let tyVars = prettyTyVars instTys
+      let protos = ListE $ map (ConE . mkName . show) dataProtocols
+      let fields = ListE $ [prettyField o fieldName field]
+      lift $ match
+        (conP 'Proxy [])
+        (normalB
+          $ pure
+          $ RecConE 'SwiftStruct
+          $ [ (mkName "name", unqualName constructorName)
+            , (mkName "tyVars", tyVars)
+            , (mkName "protocols", protos)
+            , (mkName "fields", fields)
+            ]
+        )
+       []
+  _ -> throwError ExpectedNewtypeInstance
 
 mkProd :: Options -> Name -> [Type] -> ConstructorInfo -> ShwiftyM Match
 mkProd o@Options{dataProtocols} typName instTys = \case
@@ -1161,21 +1217,12 @@ buildTypeInstance tyConName cls varTysOrig tyVarBndrs variant = do
       varTysOrigSubst =
         map (substNamesWithKindStar kindVarNames) $ varTysOrig
 
-      -- are we working on a data family
-      -- or newtype family?
-      isDataFamily :: Bool
-      isDataFamily = case variant of
-        Datatype -> False
-        Newtype -> False
-        DataInstance -> True
-        NewtypeInstance -> True
-
       -- if we are working on a data family
       -- or newtype family, we need to peel off
       -- the kinds. See Note [Kind signatures in
       -- derived instances]
       varTysOrigSubst' :: [Type]
-      varTysOrigSubst' = if isDataFamily
+      varTysOrigSubst' = if isDataFamily variant
         then varTysOrigSubst
         else map unSigT varTysOrigSubst
 
@@ -1462,3 +1509,20 @@ knowing which instance we are talking about. To avoid this scenario, we always
 include explicit kind signatures in data family instances. There is a chance that
 the inferred kind signatures will be incorrect, in which case we have to write the instance manually.
 -}
+
+-- are we working on a data family
+-- or newtype family?
+isDataFamily :: DatatypeVariant -> Bool
+isDataFamily = \case
+  NewtypeInstance -> True
+  DataInstance -> True
+  _ -> False
+
+stripConT :: [Type] -> [Type]
+stripConT = mapMaybe noConT
+  where
+    noConT = \case
+      ConT {} -> Nothing
+      t -> Just t
+
+

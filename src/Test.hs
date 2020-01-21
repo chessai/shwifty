@@ -26,13 +26,19 @@ class DataClass a where
   data family Key a
 
 instance DataClass Int where
-  newtype Key Int = IntKey { unKey :: Int }
+  newtype Key Int = IntKey { unIntKey :: Int }
 
+instance DataClass (Maybe a) where
+  newtype Key (Maybe a) = MaybeKey { unMaybeKey :: Maybe a }
+
+instance DataClass Bool where
+  data Key Bool
+    = BoolKey1 Bool
+    | BoolKey2 Bool
+
+--getShwifty 'BoolKey1
+--getShwifty 'MaybeKey
 getShwifty 'IntKey
-
---newtype Key WirePurposeDocument¬
---       1         = WirePurposeDocumentKey {unWirePurposeDocumen         tKey :: UUID}¬
-
 
 data CommonPrefixSum
   = CommonPrefixSum1
