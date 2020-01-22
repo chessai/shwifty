@@ -427,8 +427,8 @@ instance {-# overlapping #-} ToSwift [Char] where toSwift = const String
 instance ToSwift TL.Text where toSwift = const String
 instance ToSwift TS.Text where toSwift = const String
 
-instance ToSwift BL.ByteString where toSwift = const String
-instance ToSwift BS.ByteString where toSwift = const String
+instance ToSwift BL.ByteString where toSwift = const (Array U8)
+instance ToSwift BS.ByteString where toSwift = const (Array U8)
 
 instance ToSwift (CI s) where toSwift = const String
 
@@ -1524,5 +1524,3 @@ stripConT = mapMaybe noConT
     noConT = \case
       ConT {} -> Nothing
       t -> Just t
-
-
