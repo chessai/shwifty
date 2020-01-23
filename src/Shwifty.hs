@@ -3,6 +3,7 @@
   , BangPatterns
   , CPP
   , DataKinds
+  , DefaultSignatures
   , DeriveFoldable
   , DeriveFunctor
   , DeriveGeneric
@@ -10,12 +11,10 @@
   , DeriveTraversable
   , DerivingStrategies
   , DuplicateRecordFields
-  , FlexibleContexts
   , FlexibleInstances
   , GADTs
   , KindSignatures
   , LambdaCase
-  , MultiParamTypeClasses
   , NamedFieldPuns
   , OverloadedStrings
   , PolyKinds
@@ -23,7 +22,6 @@
   , ScopedTypeVariables
   , TemplateHaskell
   , TypeApplications
-  , TypeFamilies
   , ViewPatterns
 #-}
 
@@ -235,6 +233,8 @@ data SwiftData
 class ToSwiftData a where
   toSwiftData :: Proxy a -> SwiftData
   prettySwiftData :: Proxy a -> String
+  default prettySwiftData :: Proxy a -> String
+  prettySwiftData = prettySwiftDataWith (indent defaultOptions) . toSwiftData
 
 -- | Swift protocols.
 --   Only a few are supported right now.
