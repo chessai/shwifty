@@ -109,8 +109,9 @@ data Ty
     -- ^ Bool
   | Character
     -- ^ Character
-  | String
-    -- ^ String
+  | Str
+    -- ^ String. Named 'Str' to avoid conflicts with
+    --   'Data.Aeson.String'.
   | I
     -- ^ signed machine integer
   | I8
@@ -425,15 +426,15 @@ instance forall a. ToSwift a => ToSwift (Vector a) where
 instance {-# overlappable #-} forall a. ToSwift a => ToSwift [a] where
   toSwift = const (Array (toSwift (Proxy @a)))
 
-instance {-# overlapping #-} ToSwift [Char] where toSwift = const String
+instance {-# overlapping #-} ToSwift [Char] where toSwift = const Str
 
-instance ToSwift TL.Text where toSwift = const String
-instance ToSwift TS.Text where toSwift = const String
+instance ToSwift TL.Text where toSwift = const Str
+instance ToSwift TS.Text where toSwift = const Str
 
 instance ToSwift BL.ByteString where toSwift = const (Array U8)
 instance ToSwift BS.ByteString where toSwift = const (Array U8)
 
-instance ToSwift (CI s) where toSwift = const String
+instance ToSwift (CI s) where toSwift = const Str
 
 instance forall k v. (ToSwift k, ToSwift v) => ToSwift (M.Map k v) where toSwift = const (Dictionary (toSwift (Proxy @k)) (toSwift (Proxy @v)))
 
@@ -456,7 +457,7 @@ prettyTypeHeader name tyVars = name ++ "<" ++ intercalate ", " tyVars ++ ">"
 -- | Pretty-print a 'Ty'.
 prettyTy :: Ty -> String
 prettyTy = \case
-  String -> "String"
+  Str -> "String"
   Unit -> "()"
   Bool -> "Bool"
   Character -> "Character"
@@ -894,7 +895,7 @@ tyE = \case
   Character -> ConE 'Character
   UUID -> ConE 'UUID
   Date -> ConE 'Date
-  String -> ConE 'String
+  Str -> ConE 'Str
   I -> ConE 'I
   I8 -> ConE 'I8
   I16 -> ConE 'I16
