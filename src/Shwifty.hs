@@ -6,6 +6,7 @@
   , DeriveFoldable
   , DeriveFunctor
   , DeriveGeneric
+  , DeriveLift
   , DeriveTraversable
   , DerivingStrategies
   , DuplicateRecordFields
@@ -66,8 +67,6 @@ module Shwifty
 
     -- * Pretty-printing
   , prettyTy
-  , prettySwiftData
-  , prettySwiftDataWith
     -- ** Re-exports
   , X
   ) where
@@ -90,6 +89,7 @@ import GHC.Generics (Generic)
 import GHC.TypeLits (Symbol, KnownSymbol, symbolVal)
 import Language.Haskell.TH hiding (stringE)
 import Language.Haskell.TH.Datatype
+import Language.Haskell.TH.Syntax (Lift)
 import Prelude hiding (Enum(..))
 import Data.UUID.Types (UUID)
 import Data.Time (UTCTime)
@@ -173,6 +173,7 @@ data Ty
     --   type variables. Will typically be generated
     --   by 'getShwifty'.
   deriving stock (Eq, Show, Read, Generic)
+  deriving stock (Lift)
 
 -- | A Swift datatype, either a struct (product type)
 --   or enum (sum type). Haskll types are
@@ -233,6 +234,7 @@ data SwiftData
 --   'getShwifty'.
 class ToSwiftData a where
   toSwiftData :: Proxy a -> SwiftData
+  prettySwiftData :: Proxy a -> String
 
 -- | Swift protocols.
 --   Only a few are supported right now.
@@ -250,6 +252,7 @@ data Protocol
     -- ^ The 'Comparable' protocol.
     --   See https://developer.apple.com/documentation/swift/hashable
   deriving stock (Eq, Read, Show, Generic)
+  deriving stock (Lift)
 
 -- | Options that specify how to
 --   encode your 'SwiftData' to a swift type.
@@ -499,13 +502,12 @@ prettyProtocols = \case
   ps -> ": " ++ intercalate ", " (map show ps)
 
 -- | Pretty-print a 'SwiftData'.
-prettySwiftData :: SwiftData -> String
-prettySwiftData = prettySwiftDataWith defaultOptions
-
--- | Pretty-print a 'SwiftData'.
 --   This function cares about indent.
-prettySwiftDataWith :: Options -> SwiftData -> String
-prettySwiftDataWith Options{indent} = \case
+prettySwiftDataWith :: ()
+  => Int -- ^ indent
+  -> SwiftData
+  -> String
+prettySwiftDataWith indent = \case
 
   SwiftEnum {name,tyVars,protocols,cases,rawValue} -> []
     ++ "enum "
@@ -703,15 +705,20 @@ getShwiftyWith o@Options{generateToSwift,generateToSwiftData} name = do
         !instHeadData
           <- buildTypeInstance parentName ClassSwiftData instTys tyVarBndrs variant
         clauseData <- consToSwift o parentName instTys variant cons
+        clausePretty <- mkClausePretty o
         swiftDataInst <- lift $ instanceD
           (pure [])
           (pure instHeadData)
           [ funD 'toSwiftData
             [ clause [] (normalB (pure clauseData)) []
             ]
+          , funD 'prettySwiftData
+            [ clause [] (normalB (pure clausePretty)) []
+            ]
           ]
         pure [swiftDataInst]
       else pure []
+
     swiftTyInst <- if generateToSwift
       then do
         !instHeadTy
@@ -734,6 +741,7 @@ getShwiftyWith o@Options{generateToSwift,generateToSwiftData} name = do
         pure [swiftTyInst]
       else pure []
     pure $ swiftDataInst ++ swiftTyInst
+
   case r of
     Left e -> fail $ prettyShwiftyError e
     Right d -> pure d
@@ -912,11 +920,36 @@ tyE = \case
   App e1 e2 -> AppE (AppE (ConE 'App) (tyE e1)) (tyE e2)
   Array e -> AppE (ConE 'Array) (tyE e)
 
+mkClausePretty :: ()
+  => Options
+  -> ShwiftyM Exp
+mkClausePretty Options{..} = do
+  value <- lift $ newName "value"
+  matches <- lift $ do
+    x <- match
+      (conP 'Proxy [])
+      (normalB
+        $ pure
+        $ AppE
+            (AppE
+              (VarE 'prettySwiftDataWith)
+              (LitE (IntegerL (fromIntegral indent)))
+            )
+        $ ParensE
+            (AppE
+              (VarE 'toSwiftData)
+              (VarE value)
+            )
+      )
+      []
+    pure [pure x]
+  lift $ lamE [varP value] (caseE (varE value) matches)
+
 consToSwift :: ()
   => Options
      -- ^ options about how to encode things
   -> Name
-     -- ^ name of type (used for Enums only)
+     -- ^ name of type
   -> [Type]
      -- ^ type variables
   -> DatatypeVariant
@@ -1244,7 +1277,9 @@ buildTypeInstance tyConName cls varTysOrig tyVarBndrs variant = do
     (pure instanceType)
 
 -- the class we're generating an instance of
-data ShwiftyClass = ClassSwift | ClassSwiftData
+data ShwiftyClass
+  = ClassSwift -- ToSwift
+  | ClassSwiftData -- ToSwiftData
 
 -- turn a 'ShwiftyClass' into a 'Name'
 shwiftyClassName :: ShwiftyClass -> Name
