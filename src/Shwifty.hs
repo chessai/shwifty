@@ -1141,7 +1141,7 @@ mkProd o@Options{dataProtocols} typName instTys = \case
 --     case mkBar2
 --   }
 caseName :: Options -> Name -> Exp
-caseName Options{constructorModifier} = stringE . constructorModifier . onHead Char.toLower . TS.unpack . last . TS.splitOn "." . TS.pack . show
+caseName Options{constructorModifier} = stringE . onHead Char.toLower . constructorModifier . TS.unpack . last . TS.splitOn "." . TS.pack . show
 
 -- apply a function only to the head of a string
 onHead :: (Char -> Char) -> String -> String
