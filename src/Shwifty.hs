@@ -60,6 +60,7 @@ module Shwifty
   , generateToSwiftData
   , dataProtocols
   , dataRawValue
+  , stripNewtype
     -- ** Default 'Options'
   , defaultOptions
 
@@ -313,6 +314,14 @@ data Options = Options
     --   /Note/: Currently, nothing will prevent
     --   you from putting something
     --   nonsensical here.
+  , stripNewtype :: Bool
+    -- ^ Whether or not to strip a newtype
+    --   when generating its 'ToSwift' instance.
+    --
+    --   This will forego generating a 'ToSwiftData'
+    --   instance as well. It will be as though
+    --   the newtype does not exist on the Swift
+    --   side.
   }
 
 -- | The default 'Options'.
@@ -329,6 +338,7 @@ data Options = Options
 --   , generateToSwiftData = True
 --   , dataProtocols = []
 --   , dataRawValue = Nothing
+--   , stripNewtype = False
 --   }
 -- @
 --
@@ -343,6 +353,7 @@ defaultOptions = Options
   , generateToSwiftData = True
   , dataProtocols = []
   , dataRawValue = Nothing
+  , stripNewtype = False
   }
 
 -- | The class for things which can be converted to
@@ -688,7 +699,7 @@ getShwifty = getShwiftyWith defaultOptions
 --
 -- @$(getShwiftyWith myOptions ''MyType)@
 getShwiftyWith :: Options -> Name -> Q [Dec]
-getShwiftyWith o@Options{generateToSwift,generateToSwiftData} name = do
+getShwiftyWith o@Options{generateToSwift,generateToSwiftData,stripNewtype} name = do
   r <- runExceptT $ do
     ensureEnabled ScopedTypeVariables
     ensureEnabled DataKinds
@@ -726,10 +737,19 @@ getShwiftyWith o@Options{generateToSwift,generateToSwiftData} name = do
           <- buildTypeInstance parentName ClassSwift instTys tyVarBndrs variant
         clauseTy <- case variant of
           NewtypeInstance -> case cons of
-            [ConstructorInfo{constructorName}] -> do
-              newtypToSwift constructorName instTys
+            [ConstructorInfo{..}] -> if stripNewtype
+              then do newtypStripToSwift (head constructorFields)
+              else newtypToSwift constructorName instTys
             _ -> do
               throwError ExpectedNewtypeInstance
+          Newtype -> if stripNewtype
+            then case cons of
+              [ConstructorInfo{..}] -> do
+                newtypStripToSwift (head constructorFields)
+              _ -> do
+                throwError NotANewtype
+            else do
+              typToSwift parentName instTys
           _ -> do
             typToSwift parentName instTys
         swiftTyInst <- lift $ instanceD
@@ -777,6 +797,7 @@ data ShwiftyError
       , _types :: [TyVarBndr]
       }
   | ExpectedNewtypeInstance
+  | NotANewtype
 
 prettyShwiftyError :: ShwiftyError -> String
 prettyShwiftyError = \case
@@ -830,6 +851,9 @@ prettyShwiftyError = \case
     ++ "Expected a newtype instance. This is an "
     ++ "internal logic error. Please report it as a "
     ++ "bug."
+  NotANewtype -> mempty
+    ++ "Not a newtype. This is an internal logic "
+    ++ "error. Please report it as a bug."
 
 prettyTyVarBndrStr :: TyVarBndr -> String
 prettyTyVarBndrStr = \case
@@ -857,6 +881,21 @@ newtypToSwift :: ()
   -> ShwiftyM Exp
 newtypToSwift conName (stripConT -> instTys) = do
   typToSwift conName instTys
+
+newtypStripToSwift :: ()
+  => Type
+  -> ShwiftyM Exp
+newtypStripToSwift typ = do
+  value <- lift $ newName "value"
+  matches <- lift $ fmap ((:[]) . pure) $ do
+    match
+      (conP 'Proxy [])
+      (normalB
+        $ pure
+        $ toSwiftECxt typ
+      )
+      []
+  lift $ lamE [varP value] (caseE (varE value) matches)
 
 typToSwift :: ()
   => Name

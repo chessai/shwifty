@@ -37,13 +37,13 @@ instance DataClass Bool where
     | BoolKey2 Bool
 
 --getShwifty 'BoolKey1
---getShwifty 'MaybeKey
+$(getShwiftyWith (defaultOptions { stripNewtype = True }) 'MaybeKey)
 getShwifty 'IntKey
 
 data CommonPrefixSum
   = CommonPrefixSum1
   | CommonPrefixSum2
-$(getShwiftyWith (defaultOptions { fieldLabelModifier = drop 12, dataProtocols = [Hashable], dataRawValue = Just String }) ''CommonPrefixSum)
+$(getShwiftyWith (defaultOptions { fieldLabelModifier = drop 12, dataProtocols = [Hashable], dataRawValue = Just Str }) ''CommonPrefixSum)
 
 data CommonPrefix = CommonPrefix
   { commonPrefixA :: Int
