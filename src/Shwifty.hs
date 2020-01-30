@@ -82,6 +82,8 @@ import Data.List (intercalate)
 import Data.List.NonEmpty ((<|), NonEmpty(..))
 import Data.Maybe (mapMaybe, catMaybes)
 import Data.Proxy (Proxy(..))
+import Data.Time (UTCTime)
+import Data.UUID.Types (UUID)
 import Data.Vector (Vector)
 import Data.Void (Void)
 import Data.Word (Word8,Word16,Word32,Word64)
@@ -91,15 +93,13 @@ import Language.Haskell.TH hiding (stringE)
 import Language.Haskell.TH.Datatype
 import Language.Haskell.TH.Syntax (Lift)
 import Prelude hiding (Enum(..))
-import Data.UUID.Types (UUID)
-import Data.Time (UTCTime)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.Char as Char
+import qualified Data.HashMap.Strict as HM
 import qualified Data.List as L
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map as M
-import qualified Data.HashMap.Strict as HM
 import qualified Data.Text as TS
 import qualified Data.Text.Lazy as TL
 
@@ -572,7 +572,7 @@ prettySwiftDataWith indent = \case
     ++ prettyRawValueAndProtocols rawValue protocols
     ++ " {\n"
     ++ go cases
-    ++ "\n\n"
+    ++ "\n"
     ++ prettyTags indents tags
     ++ "}"
     where
