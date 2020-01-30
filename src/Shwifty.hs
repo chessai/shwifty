@@ -582,10 +582,11 @@ prettySwiftDataWith indent = \case
     ++ "enum "
     ++ prettyTypeHeader name tyVars
     ++ prettyRawValueAndProtocols rawValue protocols
-    ++ " {\n"
+    ++ " {"
+    ++ newlineNonEmpty cases
     ++ go cases
     ++ prettyTags indents tags
-    ++ tagsNewline
+    ++ newlineNonEmpty tags
     ++ "}"
     where
       go [] = ""
@@ -603,21 +604,19 @@ prettySwiftDataWith indent = \case
         ++ (intercalate ", " (map (uncurry labelCase) cs))
         ++ ")\n"
         ++ go xs
-      tagsNewline = case tags of {[] -> ""; _ -> "\n"}
   SwiftStruct {name,tyVars,protocols,fields,tags} -> []
     ++ "struct "
     ++ prettyTypeHeader name tyVars
     ++ prettyProtocols protocols
     ++ " {"
-    ++ (case fields of { [] -> " "; _ -> "\n" })
+    ++ newlineNonEmpty fields
     ++ go fields
     ++ prettyTags indents tags
-    ++ tagsNewline
+    ++ newlineNonEmpty tags
     ++ "}"
     where
       go [] = ""
       go ((fieldName,ty):fs) = indents ++ "let " ++ fieldName ++ ": " ++ prettyTy ty ++ "\n" ++ go fs
-      tagsNewline = case tags of {[] -> ""; _ -> "\n"}
   TypeAlias {name, tyVars, typ} -> []
     ++ "typealias "
     ++ prettyTypeHeader name tyVars
@@ -625,6 +624,9 @@ prettySwiftDataWith indent = \case
     ++ prettyTy typ
   where
     indents = replicate indent ' '
+
+    newlineNonEmpty [] = ""
+    newlineNonEmpty _ = "\n"
 
 ensureEnabled :: Extension -> ShwiftyM ()
 ensureEnabled ext = do
