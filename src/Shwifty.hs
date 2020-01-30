@@ -61,7 +61,6 @@ module Shwifty
   , generateToSwiftData
   , dataProtocols
   , dataRawValue
-  , stripNewtype
     -- ** Default 'Options'
   , defaultOptions
 
@@ -253,6 +252,14 @@ data SwiftData
       , tags :: [Ty]
         -- ^ The tags of the struct. See 'Tag'.
       }
+  | TypeAlias
+      { name :: String
+        -- ^ the name of the type alias
+      , tyVars :: [String]
+        -- ^ the type variables of the type alias
+      , typ :: Ty
+        -- ^ the type this represents (RHS)
+      }
   deriving stock (Eq, Read, Show, Generic)
 
 -- | The class for things which can be converted to
@@ -342,14 +349,6 @@ data Options = Options
     --   /Note/: Currently, nothing will prevent
     --   you from putting something
     --   nonsensical here.
-  , stripNewtype :: Bool
-    -- ^ Whether or not to strip a newtype
-    --   when generating its 'ToSwift' instance.
-    --
-    --   This will forego generating a 'ToSwiftData'
-    --   instance as well. It will be as though
-    --   the newtype does not exist on the Swift
-    --   side.
   }
 
 -- | The default 'Options'.
@@ -366,7 +365,6 @@ data Options = Options
 --   , generateToSwiftData = True
 --   , dataProtocols = []
 --   , dataRawValue = Nothing
---   , stripNewtype = False
 --   }
 -- @
 --
@@ -381,7 +379,6 @@ defaultOptions = Options
   , generateToSwiftData = True
   , dataProtocols = []
   , dataRawValue = Nothing
-  , stripNewtype = False
   }
 
 -- | The class for things which can be converted to
@@ -607,6 +604,11 @@ prettySwiftDataWith indent = \case
       go [] = ""
       go ((fieldName,ty):fs) = indents ++ "let " ++ fieldName ++ ": " ++ prettyTy ty ++ "\n" ++ go fs
       tagsNewline = case tags of {[] -> ""; _ -> "\n"}
+  TypeAlias {name, tyVars, typ} -> []
+    ++ "typealias "
+    ++ prettyTypeHeader name tyVars
+    ++ " = "
+    ++ prettyTy typ
   where
     indents = replicate indent ' '
 
@@ -874,19 +876,10 @@ getShwiftyWithTags o@Options{..} ts name = do
           <- buildTypeInstance parentName ClassSwift instTys tyVarBndrs variant
         clauseTy <- case variant of
           NewtypeInstance -> case cons of
-            [ConstructorInfo{..}] -> if stripNewtype
-              then do newtypStripToSwift (head constructorFields)
-              else newtypToSwift constructorName instTys
+            [ConstructorInfo{..}] -> do
+              newtypToSwift constructorName instTys
             _ -> do
               throwError ExpectedNewtypeInstance
-          Newtype -> if stripNewtype
-            then case cons of
-              [ConstructorInfo{..}] -> do
-                newtypStripToSwift (head constructorFields)
-              _ -> do
-                throwError $ NotANewtype parentName
-            else do
-              typToSwift parentName instTys
           _ -> do
             typToSwift parentName instTys
         swiftTyInst <- lift $ instanceD
@@ -1044,21 +1037,6 @@ newtypToSwift :: ()
   -> ShwiftyM Exp
 newtypToSwift conName (stripConT -> instTys) = do
   typToSwift conName instTys
-
-newtypStripToSwift :: ()
-  => Type
-  -> ShwiftyM Exp
-newtypStripToSwift typ = do
-  value <- lift $ newName "value"
-  matches <- lift $ fmap ((:[]) . pure) $ do
-    match
-      (conP 'Proxy [])
-      (normalB
-        $ pure
-        $ toSwiftECxt typ
-      )
-      []
-  lift $ lamE [varP value] (caseE (varE value) matches)
 
 typToSwift :: ()
   => Name
