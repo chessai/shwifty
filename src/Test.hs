@@ -13,7 +13,7 @@
   , FlexibleInstances
 #-}
 
-{-# options_ghc -ddump-splices #-}
+--{-# options_ghc -ddump-splices #-}
 
 module Test where
 
@@ -21,6 +21,7 @@ import Shwifty
 import Data.Proxy
 import Data.Kind (Type)
 import Data.Void (Void)
+import qualified Data.UUID.Types
 
 class DataClass a where
   data family Key a
@@ -28,17 +29,32 @@ class DataClass a where
 instance DataClass Int where
   newtype Key Int = IntKey { unIntKey :: Int }
 
-instance DataClass (Maybe a) where
-  newtype Key (Maybe a) = MaybeKey { unMaybeKey :: Maybe a }
+data HasTags = HasTags { x :: Int, y :: Int }
 
-instance DataClass Bool where
-  data Key Bool
-    = BoolKey1 Bool
-    | BoolKey2 Bool
+$(getShwiftyWithTags defaultOptions ([ 'IntKey ]) ''HasTags)
 
---getShwifty 'BoolKey1
-$(getShwiftyWith (defaultOptions { stripNewtype = True }) 'MaybeKey)
-getShwifty 'IntKey
+type U = Data.UUID.Types.UUID
+
+newtype TypeOneId = TypeOneId { getTypeOneId :: U }
+newtype TypeTwoId = TypeTwoId { getTypeTwoId :: U }
+
+data TypeOne = TypeOne
+  { id :: TypeOneId
+  , x :: Int
+  }
+$(getShwiftyWithTags defaultOptions ([ ''TypeOneId ]) ''TypeOne)
+
+data TypeTwo = TypeTwo
+  { id :: TypeTwoId
+  , x :: Int
+  }
+$(getShwiftyWithTags defaultOptions ([ ''TypeTwoId ]) ''TypeTwo)
+
+data TypeThree = TypeThree
+  { hasExternalTag :: TypeTwoId
+  , x :: Int
+  }
+getShwifty ''TypeThree
 
 data CommonPrefixSum
   = CommonPrefixSum1
@@ -120,9 +136,13 @@ test = do
   testPrint @(M X)
   testPrint @CommonPrefix
   testPrint @CommonPrefixSum
+  testPrint @HasTags
+  testPrint @TypeOne
+  testPrint @TypeTwo
+  testPrint @TypeThree
 
 testPrint :: forall a. ToSwiftData a => IO ()
-testPrint = putStrLn $ prettySwiftData $ toSwiftData (Proxy @a)
+testPrint = putStrLn $ prettySwiftData $ Proxy @a
 
 --data VoidTest
 --getShwifty ''VoidTest

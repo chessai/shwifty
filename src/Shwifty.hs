@@ -42,6 +42,7 @@ module Shwifty
     -- * Generating instances
   , getShwifty
   , getShwiftyWith
+  , getShwiftyWithTags
 
     -- * Types
   , Ty(..)
@@ -155,6 +156,8 @@ data Ty
     -- ^ Maybe type
   | Result Ty Ty
     -- ^ Either type
+  | Set Ty
+    -- ^ Set type
   | Dictionary Ty Ty
     -- ^ Dictionary type
   | Array Ty
@@ -172,7 +175,28 @@ data Ty
     -- ^ a concrete type variable, and its
     --   type variables. Will typically be generated
     --   by 'getShwifty'.
-  deriving stock (Eq, Show, Read, Generic)
+  | Tag
+      { name :: String
+        -- ^ the name of the type
+      , parent :: String
+        -- ^ the type constructor of the type
+        --   to which this alias belongs
+      , typ :: Ty
+        -- ^ the type that this represents
+      }
+    -- ^ A 'Tagged' typealias, for newtyping
+    --   in a way that doesn't break Codable.
+    --
+    --   e.g.
+    --
+    --   struct Product: Codable {
+    --     let id: ProductID
+    --     let descr: String
+    --
+    --     typealias ProductID = Tagged<Product,UUID>
+    --   }
+  deriving stock (Eq, Show, Read)
+  deriving stock (Generic)
   deriving stock (Lift)
 
 -- | A Swift datatype, either a struct (product type)
@@ -201,6 +225,8 @@ data SwiftData
       , fields :: [(String, Ty)]
         -- ^ The fields of the struct. the pair
         --   is interpreted as (name, type).
+      , tags :: [Ty]
+        -- ^ The tags of the struct. See 'Tag'.
       }
   | SwiftEnum
       { name :: String
@@ -224,6 +250,8 @@ data SwiftData
         --   /Note/: Currently, nothing will prevent
         --   you from putting something
         --   nonsensical here.
+      , tags :: [Ty]
+        -- ^ The tags of the struct. See 'Tag'.
       }
   deriving stock (Eq, Read, Show, Generic)
 
@@ -478,8 +506,9 @@ prettyTy = \case
   Tuple3 e1 e2 e3 -> "(" ++ prettyTy e1 ++ ", " ++ prettyTy e2 ++ ", " ++ prettyTy e3 ++ ")"
   Optional e -> prettyTy e ++ "?"
   Result e1 e2 -> "Result<" ++ prettyTy e1 ++ ", " ++ prettyTy e2 ++ ">"
+  Set e -> "Set<" ++ prettyTy e ++ ">"
   Dictionary e1 e2 -> "Dictionary<" ++ prettyTy e1 ++ ", " ++ prettyTy e2 ++ ">"
-  Array e -> "Array<" ++ prettyTy e ++ ">"
+  Array e -> "[" ++ prettyTy e ++ "]"
   App e1 e2 -> "((" ++ prettyTy e1 ++ ") -> " ++ prettyTy e2 ++ ")"
   I -> "Int"
   I8 -> "Int8"
@@ -502,6 +531,7 @@ prettyTy = \case
     ++ "<"
     ++ intercalate ", " (map prettyTy tys)
     ++ ">"
+  Tag {name,parent} -> parent ++ "." ++ name
 
 prettyRawValueAndProtocols :: Maybe Ty -> [Protocol] -> String
 prettyRawValueAndProtocols Nothing ps = prettyProtocols ps
@@ -513,6 +543,21 @@ prettyProtocols = \case
   [] -> ""
   ps -> ": " ++ intercalate ", " (map show ps)
 
+prettyTags :: String -> [Ty] -> String
+prettyTags indents = go where
+  go [] = ""
+  go (Tag{name,parent,typ}:ts) = []
+    ++ indents
+    ++ "typealias "
+    ++ name
+    ++ " = Tagged<"
+    ++ parent
+    ++ ", "
+    ++ prettyTy typ
+    ++ ">\n"
+    ++ go ts
+  go _ = error "non-tag supplied to prettyTags"
+
 -- | Pretty-print a 'SwiftData'.
 --   This function cares about indent.
 prettySwiftDataWith :: ()
@@ -521,12 +566,14 @@ prettySwiftDataWith :: ()
   -> String
 prettySwiftDataWith indent = \case
 
-  SwiftEnum {name,tyVars,protocols,cases,rawValue} -> []
+  SwiftEnum {name,tyVars,protocols,cases,rawValue,tags} -> []
     ++ "enum "
     ++ prettyTypeHeader name tyVars
     ++ prettyRawValueAndProtocols rawValue protocols
     ++ " {\n"
     ++ go cases
+    ++ "\n\n"
+    ++ prettyTags indents tags
     ++ "}"
     where
       go [] = ""
@@ -544,14 +591,15 @@ prettySwiftDataWith indent = \case
         ++ (intercalate ", " (map (uncurry labelCase) cs))
         ++ ")\n"
         ++ go xs
-
-  SwiftStruct {name,tyVars,protocols,fields} -> []
+  SwiftStruct {name,tyVars,protocols,fields,tags} -> []
     ++ "struct "
     ++ prettyTypeHeader name tyVars
     ++ prettyProtocols protocols
     ++ " {"
     ++ (case fields of { [] -> " "; _ -> "\n" })
     ++ go fields
+    ++ "\n"
+    ++ prettyTags indents tags
     ++ "}"
     where
       go [] = ""
@@ -699,7 +747,92 @@ getShwifty = getShwiftyWith defaultOptions
 --
 -- @$(getShwiftyWith myOptions ''MyType)@
 getShwiftyWith :: Options -> Name -> Q [Dec]
-getShwiftyWith o@Options{generateToSwift,generateToSwiftData,stripNewtype} name = do
+getShwiftyWith o n = getShwiftyWithTags o [] n
+
+data NewtypeInfo = NewtypeInfo
+  { newtypeName :: Name
+    -- ^ Type constructor
+  , newtypeVars :: [TyVarBndr]
+    -- ^ Type parameters
+  , newtypeInstTypes :: [Type]
+    -- ^ Argument types
+  , newtypeVariant :: DatatypeVariant
+    -- ^ Whether or not the type is a
+    --   newtype or newtype instance
+  , newtypeCon :: ConstructorInfo
+  }
+
+reifyNewtype :: Name -> ShwiftyM NewtypeInfo
+reifyNewtype n = do
+  DatatypeInfo{..} <- lift $ reifyDatatype n
+  case datatypeCons of
+    [c] -> do
+      pure NewtypeInfo {
+        newtypeName = datatypeName
+      , newtypeVars = datatypeVars
+      , newtypeInstTypes = datatypeInstTypes
+      , newtypeVariant = datatypeVariant
+      , newtypeCon = c
+      }
+    _ -> do
+      throwError $ NotANewtype n
+
+-- Generate the tags for a type.
+-- Also generate the ToSwift instance for each tag
+-- type. We can't just expect people to do this
+-- with a separate 'getShwifty' call, because
+-- they will generate the wrong code, since other
+-- types with a tag that isn't theirs won't generate
+-- well-scoped fields.
+getTags :: ()
+  => Name
+     -- ^ name of parent type
+  -> [Name]
+     -- ^ tags
+  -> ShwiftyM ([Exp], [Dec])
+getTags parentName ts = do
+  tags <- foldlM
+    (\(es,ds) n -> do
+
+      NewtypeInfo{..} <- reifyNewtype n
+      let ConstructorInfo{..} = newtypeCon
+
+      -- generate the tag
+      let tyconName = case newtypeVariant of
+            NewtypeInstance -> constructorName
+            _ -> newtypeName
+      typ <- case constructorFields of
+        [ty] -> pure ty
+        _ -> throwError $ NotANewtype newtypeName
+      let tag = RecConE 'Tag
+            [ (mkName "name", unqualName tyconName)
+            , (mkName "parent", unqualName parentName)
+            , (mkName "typ", toSwiftEPoly typ)
+            ]
+
+      -- generate the instance
+      !instHeadTy
+        <- buildTypeInstance newtypeName ClassSwift newtypeInstTypes newtypeVars newtypeVariant
+      -- we do not want to strip here
+      clauseTy <- tagToSwift tyconName typ parentName
+      swiftTyInst <- lift $ instanceD
+        (pure [])
+        (pure instHeadTy)
+        [ funD 'toSwift
+          [ clause [] (normalB (pure clauseTy)) []
+          ]
+        ]
+
+      pure $ (es ++ [tag], ds ++ [swiftTyInst])
+    ) ([], []) ts
+  pure tags
+
+getShwiftyWithTags :: ()
+  => Options
+  -> [Name]
+  -> Name
+  -> Q [Dec]
+getShwiftyWithTags o@Options{..} ts name = do
   r <- runExceptT $ do
     ensureEnabled ScopedTypeVariables
     ensureEnabled DataKinds
@@ -712,11 +845,12 @@ getShwiftyWith o@Options{generateToSwift,generateToSwiftData,stripNewtype} name 
       , datatypeCons = cons
       } <- lift $ reifyDatatype name
     noExistentials cons
+    (tags, extraDecs) <- getTags parentName ts
     swiftDataInst <- if generateToSwiftData
       then do
         !instHeadData
           <- buildTypeInstance parentName ClassSwiftData instTys tyVarBndrs variant
-        clauseData <- consToSwift o parentName instTys variant cons
+        clauseData <- consToSwift o parentName instTys variant tags cons
         clausePretty <- mkClausePretty o
         swiftDataInst <- lift $ instanceD
           (pure [])
@@ -747,7 +881,7 @@ getShwiftyWith o@Options{generateToSwift,generateToSwiftData,stripNewtype} name 
               [ConstructorInfo{..}] -> do
                 newtypStripToSwift (head constructorFields)
               _ -> do
-                throwError NotANewtype
+                throwError $ NotANewtype parentName
             else do
               typToSwift parentName instTys
           _ -> do
@@ -761,8 +895,7 @@ getShwiftyWith o@Options{generateToSwift,generateToSwiftData,stripNewtype} name 
           ]
         pure [swiftTyInst]
       else pure []
-    pure $ swiftDataInst ++ swiftTyInst
-
+    pure $ swiftDataInst ++ swiftTyInst ++ extraDecs
   case r of
     Left e -> fail $ prettyShwiftyError e
     Right d -> pure d
@@ -798,6 +931,8 @@ data ShwiftyError
       }
   | ExpectedNewtypeInstance
   | NotANewtype
+      { _typName :: Name
+      }
 
 prettyShwiftyError :: ShwiftyError -> String
 prettyShwiftyError = \case
@@ -851,8 +986,9 @@ prettyShwiftyError = \case
     ++ "Expected a newtype instance. This is an "
     ++ "internal logic error. Please report it as a "
     ++ "bug."
-  NotANewtype -> mempty
-    ++ "Not a newtype. This is an internal logic "
+  NotANewtype (nameStr -> n) -> mempty
+    ++ n
+    ++ " is not a newtype. This is an internal logic "
     ++ "error. Please report it as a bug."
 
 prettyTyVarBndrStr :: TyVarBndr -> String
@@ -873,6 +1009,30 @@ prettyKindVar = \case
 
 type ShwiftyM = ExceptT ShwiftyError Q
 
+tagToSwift :: ()
+  => Name
+     -- ^ name of the type constructor
+  -> Type
+     -- ^ type variables
+  -> Name
+     -- ^ parent name
+  -> ShwiftyM Exp
+tagToSwift tyconName typ parentName = do
+  -- TODO: use '_' instead of matching
+  value <- lift $ newName "value"
+  matches <- lift $ fmap ((:[]) . pure) $ do
+    match
+      (conP 'Proxy [])
+      (normalB
+        $ pure
+        $ RecConE 'Tag
+        $ [ (mkName "name", unqualName tyconName)
+          , (mkName "parent", unqualName parentName)
+          , (mkName "typ", toSwiftECxt typ)
+          ]
+      )
+      []
+  lift $ lamE [varP value] (caseE (varE value) matches)
 newtypToSwift :: ()
   => Name
      -- ^ name of the constructor
@@ -956,9 +1116,11 @@ tyE = \case
   Tuple3 e1 e2 e3 -> AppE (AppE (AppE (ConE 'Tuple3) (tyE e1)) (tyE e2)) (tyE e3)
   Optional e -> AppE (ConE 'Optional) (tyE e)
   Result e1 e2 -> AppE (AppE (ConE 'Result) (tyE e1)) (tyE e2)
+  Set e -> AppE (ConE 'Set) (tyE e)
   Dictionary e1 e2 -> AppE (AppE (ConE 'Dictionary) (tyE e1)) (tyE e2)
   App e1 e2 -> AppE (AppE (ConE 'App) (tyE e1)) (tyE e2)
   Array e -> AppE (ConE 'Array) (tyE e)
+  Tag{name,parent,typ} -> AppE (AppE (AppE (ConE 'Tag) (stringE name)) (stringE parent)) (tyE typ)
 
 mkClausePretty :: ()
   => Options
@@ -994,10 +1156,12 @@ consToSwift :: ()
      -- ^ type variables
   -> DatatypeVariant
      -- ^ data type variant
+  -> [Exp]
+     -- ^ tags
   -> [ConstructorInfo]
      -- ^ constructors
   -> ShwiftyM Exp
-consToSwift o@Options{dataProtocols,dataRawValue} parentName instTys variant = \case
+consToSwift o@Options{dataProtocols,dataRawValue} parentName instTys variant ts = \case
   [] -> do
     throwError $ VoidType parentName
   cons -> do
@@ -1012,13 +1176,14 @@ consToSwift o@Options{dataProtocols,dataRawValue} parentName instTys variant = \
         [con] -> do
           case variant of
             NewtypeInstance -> do
-              ((:[]) . pure) <$> mkNewtypeInstance o instTys con
+              ((:[]) . pure) <$> mkNewtypeInstance o instTys ts con
             _ -> do
-              ((:[]) . pure) <$> mkProd o parentName instTys con
+              ((:[]) . pure) <$> mkProd o parentName instTys ts con
         _ -> do
           let tyVars = prettyTyVars instTys
           let protos = map (ConE . mkName . show) dataProtocols
           let raw = rawValueE dataRawValue
+          let tags = ListE ts
           cases <- forM cons (liftEither . mkCase o)
           pure $ (:[]) $ match
             (conP 'Proxy [])
@@ -1030,14 +1195,19 @@ consToSwift o@Options{dataProtocols,dataRawValue} parentName instTys variant = \
                  , (mkName "protocols", ListE protos)
                  , (mkName "cases", ListE cases)
                  , (mkName "rawValue", raw)
+                 , (mkName "tags", tags)
                  ]
             )
             []
 
+-- Create the case (String, [(Maybe String, Ty)])
 mkCaseHelper :: Options -> Name -> [Exp] -> Exp
 mkCaseHelper o name es = TupE [ caseName o name, ListE es ]
 
-mkCase :: Options -> ConstructorInfo -> Either ShwiftyError Exp
+mkCase :: ()
+  => Options
+  -> ConstructorInfo
+  -> Either ShwiftyError Exp
 mkCase o = \case
   -- non-record
   ConstructorInfo
@@ -1084,8 +1254,17 @@ mkLabel Options{fieldLabelModifier} = AppE (ConE 'Just)
   . TS.pack
   . show
 
-mkNewtypeInstance :: Options -> [Type] -> ConstructorInfo -> ShwiftyM Match
-mkNewtypeInstance o@Options{dataProtocols} (stripConT -> instTys) = \case
+mkNewtypeInstance :: ()
+  => Options
+     -- ^ encoding options
+  -> [Type]
+     -- ^ type variables
+  -> [Exp]
+     -- ^ tags
+  -> ConstructorInfo
+     -- ^ constructor info
+  -> ShwiftyM Match
+mkNewtypeInstance o@Options{dataProtocols} (stripConT -> instTys) ts = \case
   ConstructorInfo
     { constructorVariant = RecordConstructor [fieldName]
     , constructorFields = [field]
@@ -1094,6 +1273,7 @@ mkNewtypeInstance o@Options{dataProtocols} (stripConT -> instTys) = \case
       let tyVars = prettyTyVars instTys
       let protos = ListE $ map (ConE . mkName . show) dataProtocols
       let fields = ListE $ [prettyField o fieldName field]
+      let tags = ListE ts
       lift $ match
         (conP 'Proxy [])
         (normalB
@@ -1103,13 +1283,26 @@ mkNewtypeInstance o@Options{dataProtocols} (stripConT -> instTys) = \case
             , (mkName "tyVars", tyVars)
             , (mkName "protocols", protos)
             , (mkName "fields", fields)
+            , (mkName "tags", tags)
             ]
         )
        []
   _ -> throwError ExpectedNewtypeInstance
 
-mkProd :: Options -> Name -> [Type] -> ConstructorInfo -> ShwiftyM Match
-mkProd o@Options{dataProtocols} typName instTys = \case
+-- | Make a single-constructor product (struct)
+mkProd :: ()
+  => Options
+     -- ^ encoding options
+  -> Name
+     -- ^ type name
+  -> [Type]
+     -- ^ type variables
+  -> [Exp]
+     -- ^ tags
+  -> ConstructorInfo
+     -- ^ constructor info
+  -> ShwiftyM Match
+mkProd o@Options{dataProtocols} typName instTys ts = \case
   -- single constructor, no fields
   ConstructorInfo
     { constructorVariant = NormalConstructor
@@ -1118,6 +1311,7 @@ mkProd o@Options{dataProtocols} typName instTys = \case
     } -> do
       let tyVars = prettyTyVars instTys
       let protos = map (ConE . mkName . show) dataProtocols
+      let tags = ListE ts
       lift $ match
         (conP 'Proxy [])
         (normalB
@@ -1127,6 +1321,7 @@ mkProd o@Options{dataProtocols} typName instTys = \case
             , (mkName "tyVars", tyVars)
             , (mkName "protocols", ListE protos)
             , (mkName "fields", ListE [])
+            , (mkName "tags", tags)
             ]
         )
         []
@@ -1150,6 +1345,7 @@ mkProd o@Options{dataProtocols} typName instTys = \case
       let tyVars = prettyTyVars instTys
       let protos = map (ConE . mkName . show) dataProtocols
       let fields = ListE $ zipWith (prettyField o) fieldNames constructorFields
+      let tags = ListE ts
       lift $ match
         (conP 'Proxy [])
         (normalB
@@ -1159,6 +1355,7 @@ mkProd o@Options{dataProtocols} typName instTys = \case
             , (mkName "tyVars", tyVars)
             , (mkName "protocols", ListE protos)
             , (mkName "fields", fields)
+            , (mkName "tags", tags)
             ]
         )
         []
