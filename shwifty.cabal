@@ -29,7 +29,7 @@ library
     src
   exposed-modules:
     Shwifty
-    Test
+    --Test
   build-depends:
     , base >= 4.11 && < 4.14
     , bytestring >= 0.10 && < 0.11
