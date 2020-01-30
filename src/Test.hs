@@ -23,6 +23,13 @@ import Data.Kind (Type)
 import Data.Void (Void)
 import qualified Data.UUID.Types
 
+newtype EnumTestTag = EnumTestTag Int
+
+data EnumTest
+  = Enum1
+  | Enum2 { x :: Int }
+$(getShwiftyWithTags defaultOptions ([ ''EnumTestTag ]) ''EnumTest)
+
 class DataClass a where
   data family Key a
 
@@ -140,6 +147,7 @@ test = do
   testPrint @TypeOne
   testPrint @TypeTwo
   testPrint @TypeThree
+  testPrint @EnumTest
 
 testPrint :: forall a. ToSwiftData a => IO ()
 testPrint = putStrLn $ prettySwiftData $ Proxy @a

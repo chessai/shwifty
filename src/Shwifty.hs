@@ -547,6 +547,7 @@ prettyTags :: String -> [Ty] -> String
 prettyTags indents = go where
   go [] = ""
   go (Tag{name,parent,typ}:ts) = []
+    ++ "\n"
     ++ indents
     ++ "typealias "
     ++ name
@@ -554,7 +555,7 @@ prettyTags indents = go where
     ++ parent
     ++ ", "
     ++ prettyTy typ
-    ++ ">\n"
+    ++ ">"
     ++ go ts
   go _ = error "non-tag supplied to prettyTags"
 
@@ -572,8 +573,8 @@ prettySwiftDataWith indent = \case
     ++ prettyRawValueAndProtocols rawValue protocols
     ++ " {\n"
     ++ go cases
-    ++ "\n"
     ++ prettyTags indents tags
+    ++ tagsNewline
     ++ "}"
     where
       go [] = ""
@@ -591,6 +592,7 @@ prettySwiftDataWith indent = \case
         ++ (intercalate ", " (map (uncurry labelCase) cs))
         ++ ")\n"
         ++ go xs
+      tagsNewline = case tags of {[] -> ""; _ -> "\n"}
   SwiftStruct {name,tyVars,protocols,fields,tags} -> []
     ++ "struct "
     ++ prettyTypeHeader name tyVars
@@ -598,12 +600,13 @@ prettySwiftDataWith indent = \case
     ++ " {"
     ++ (case fields of { [] -> " "; _ -> "\n" })
     ++ go fields
-    ++ "\n"
     ++ prettyTags indents tags
+    ++ tagsNewline
     ++ "}"
     where
       go [] = ""
       go ((fieldName,ty):fs) = indents ++ "let " ++ fieldName ++ ": " ++ prettyTy ty ++ "\n" ++ go fs
+      tagsNewline = case tags of {[] -> ""; _ -> "\n"}
   where
     indents = replicate indent ' '
 
