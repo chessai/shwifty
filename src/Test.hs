@@ -23,6 +23,15 @@ import Data.Kind (Type)
 import Data.Void (Void)
 import qualified Data.UUID.Types
 
+newtype AliasTest = AliastTest Int
+$(getShwiftyWith (defaultOptions { typeAlias = True }) ''AliasTest)
+
+-- newtype AliasTestArb a = AliasTestArb { getAliasTestArb :: Maybe a }
+-- $(getShwiftyWith (defaultOptions { typeAlias = True }) ''AliasTestArb)
+
+newtype AliasTestPoly a = AliasTestPoly Int
+$(getShwiftyWith (defaultOptions { typeAlias = True }) ''AliasTestPoly)
+
 newtype EnumTestTag = EnumTestTag Int
 
 data EnumTest
@@ -148,6 +157,9 @@ test = do
   testPrint @TypeTwo
   testPrint @TypeThree
   testPrint @EnumTest
+  testPrint @AliasTest
+  testPrint @(AliasTestPoly X)
+  --testPrint @(AliasTestArb X)
 
 testPrint :: forall a. ToSwiftData a => IO ()
 testPrint = putStrLn $ prettySwiftData $ Proxy @a

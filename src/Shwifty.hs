@@ -61,6 +61,7 @@ module Shwifty
   , generateToSwiftData
   , dataProtocols
   , dataRawValue
+  , typeAlias
     -- ** Default 'Options'
   , defaultOptions
 
@@ -349,6 +350,13 @@ data Options = Options
     --   /Note/: Currently, nothing will prevent
     --   you from putting something
     --   nonsensical here.
+  , typeAlias :: Bool
+    -- ^ Whether or not to generate a newtype as
+    --   a type alias. Consider if you want this
+    --   or to use 'getShwiftyWithTags' instead.
+    --
+    --   The default ('False') will generate newtypes
+    --   as their own structs.
   }
 
 -- | The default 'Options'.
@@ -365,6 +373,7 @@ data Options = Options
 --   , generateToSwiftData = True
 --   , dataProtocols = []
 --   , dataRawValue = Nothing
+--   , typeAlias = False
 --   }
 -- @
 --
@@ -379,6 +388,7 @@ defaultOptions = Options
   , generateToSwiftData = True
   , dataProtocols = []
   , dataRawValue = Nothing
+  , typeAlias = False
   }
 
 -- | The class for things which can be converted to
@@ -389,6 +399,10 @@ defaultOptions = Options
 class ToSwift a where
   toSwift :: Proxy a -> Ty
 
+-- Used internally to reflect polymorphic type
+-- variables into TH, then reify them into 'Poly'.
+--
+-- See the Rose tree section below
 data SingSymbol (x :: Symbol)
 instance KnownSymbol x => ToSwift (SingSymbol x) where
   toSwift _ = Poly (symbolVal (Proxy @x))
@@ -832,6 +846,115 @@ getTags parentName ts = do
     ) ([], []) ts
   pure tags
 
+-- | Like 'getShwiftyWith', but lets you supply
+--   tags. Tags are type-safe typealiases that
+--   are akin to newtypes in Haskell. Since the
+--   introduction of a struct around something
+--   which is, say, a UUID in Swift means that
+--   the default Codable instance will not work
+--   correctly. So we introduce a tag(s). See the
+--   examples to see how this looks. Also, see
+--   https://github.com/pointfreeco/swift-tagged,
+--   the library which these tags use. The library
+--   is not included in any generated code.
+--
+-- === __Examples__
+--
+-- > -- Example of using the swift-tagged library:
+-- > -- A type containing a database key
+-- > data User = User { id :: UserId, name :: Text }
+-- > -- the user key
+-- > newtype UserId = UserId UUID
+-- > $(getShwiftyWithTags defaultOptions [ ''UserId ] ''User)
+-- > -- A type that also contains the UserId
+-- > data UserDetails = UserDetails { id :: UserId, lastName :: Text }
+-- > getShwifty ''UserDetails
+--
+-- @
+-- struct User {
+--   let id: UserId
+--   let name: String
+--
+--   typealias UserId = Tagged<User,UUID>
+-- }
+--
+-- struct UserDetails {
+--   let id: User.UserId
+--   let lastName: String
+-- }
+-- @
+
+getToSwift :: ()
+  => Options
+     -- ^ options
+  -> Name
+     -- ^ type name
+  -> [Type]
+     -- ^ type variables
+  -> [TyVarBndr]
+     -- ^ type binders
+  -> DatatypeVariant
+     -- ^ type variant
+  -> [ConstructorInfo]
+     -- ^ constructors
+  -> ShwiftyM [Dec]
+getToSwift Options{generateToSwift} parentName instTys tyVarBndrs variant cons = if generateToSwift
+  then do
+    instHead <- buildTypeInstance parentName ClassSwift instTys tyVarBndrs variant
+    clauseTy <- case variant of
+      NewtypeInstance -> case cons of
+        [ConstructorInfo{..}] -> do
+          newtypToSwift constructorName instTys
+        _ -> do
+          throwError ExpectedNewtypeInstance
+      _ -> do
+        typToSwift parentName instTys
+    inst <- lift $ instanceD
+      (pure [])
+      (pure instHead)
+      [ funD 'toSwift
+        [ clause [] (normalB (pure clauseTy)) []
+        ]
+      ]
+    pure [inst]
+  else do
+    pure []
+
+getToSwiftData :: ()
+  => Options
+     -- ^ options
+  -> Name
+     -- ^ type name
+  -> [Type]
+     -- ^ type variables
+  -> [TyVarBndr]
+     -- ^ type binders
+  -> DatatypeVariant
+     -- ^ type variant
+  -> [Exp]
+     -- ^ tags
+  -> [ConstructorInfo]
+     -- ^ constructors
+  -> ShwiftyM [Dec]
+getToSwiftData o@Options{..} parentName instTys tyVarBndrs variant tags cons = if generateToSwiftData
+  then do
+    instHead <- buildTypeInstance parentName ClassSwiftData instTys tyVarBndrs variant
+    clauseData <- consToSwift o parentName instTys variant tags cons
+    clausePretty <- mkClausePretty o
+    inst <- lift $ instanceD
+      (pure [])
+      (pure instHead)
+        [ funD 'toSwiftData
+          [ clause [] (normalB (pure clauseData)) []
+          ]
+        , funD 'prettySwiftData
+          [ clause [] (normalB (pure clausePretty)) []
+          ]
+        ]
+    pure [inst]
+  else do
+    pure []
+
 getShwiftyWithTags :: ()
   => Options
   -> [Name]
@@ -850,47 +973,13 @@ getShwiftyWithTags o@Options{..} ts name = do
       , datatypeCons = cons
       } <- lift $ reifyDatatype name
     noExistentials cons
-    (tags, extraDecs) <- getTags parentName ts
-    swiftDataInst <- if generateToSwiftData
-      then do
-        !instHeadData
-          <- buildTypeInstance parentName ClassSwiftData instTys tyVarBndrs variant
-        clauseData <- consToSwift o parentName instTys variant tags cons
-        clausePretty <- mkClausePretty o
-        swiftDataInst <- lift $ instanceD
-          (pure [])
-          (pure instHeadData)
-          [ funD 'toSwiftData
-            [ clause [] (normalB (pure clauseData)) []
-            ]
-          , funD 'prettySwiftData
-            [ clause [] (normalB (pure clausePretty)) []
-            ]
-          ]
-        pure [swiftDataInst]
-      else pure []
 
-    swiftTyInst <- if generateToSwift
-      then do
-        !instHeadTy
-          <- buildTypeInstance parentName ClassSwift instTys tyVarBndrs variant
-        clauseTy <- case variant of
-          NewtypeInstance -> case cons of
-            [ConstructorInfo{..}] -> do
-              newtypToSwift constructorName instTys
-            _ -> do
-              throwError ExpectedNewtypeInstance
-          _ -> do
-            typToSwift parentName instTys
-        swiftTyInst <- lift $ instanceD
-          (pure [])
-          (pure instHeadTy)
-          [ funD 'toSwift
-            [ clause [] (normalB (pure clauseTy)) []
-            ]
-          ]
-        pure [swiftTyInst]
-      else pure []
+    -- get tags/ToSwift instances for tags
+    (tags, extraDecs) <- getTags parentName ts
+
+    swiftDataInst <- getToSwiftData o parentName instTys tyVarBndrs variant tags cons
+
+    swiftTyInst <- getToSwift o parentName instTys tyVarBndrs variant cons
     pure $ swiftDataInst ++ swiftTyInst ++ extraDecs
   case r of
     Left e -> fail $ prettyShwiftyError e
@@ -1142,7 +1231,7 @@ consToSwift :: ()
   -> [ConstructorInfo]
      -- ^ constructors
   -> ShwiftyM Exp
-consToSwift o@Options{dataProtocols,dataRawValue} parentName instTys variant ts = \case
+consToSwift o@Options{dataProtocols,dataRawValue,typeAlias} parentName instTys variant ts = \case
   [] -> do
     throwError $ VoidType parentName
   cons -> do
@@ -1151,15 +1240,25 @@ consToSwift o@Options{dataProtocols,dataRawValue} parentName instTys variant ts 
     matches <- matchesWorker
     lift $ lamE [varP value] (caseE (varE value) matches)
     where
+      liftCons :: (Functor f, Applicative g) => f a -> f ([g a])
+      liftCons x = ((:[]) . pure) <$> x
       -- bad name
       matchesWorker :: ShwiftyM [Q Match]
       matchesWorker = case cons of
         [con] -> do
           case variant of
-            NewtypeInstance -> do
-              ((:[]) . pure) <$> mkNewtypeInstance o instTys ts con
+            NewtypeInstance -> if typeAlias
+              then do
+                liftCons $ mkNewtypeInstanceAlias instTys con
+              else do
+                liftCons $ mkNewtypeInstance o instTys ts con
+            Newtype -> if typeAlias
+              then do
+                liftCons $ mkTypeAlias parentName instTys con
+              else do
+                liftCons $ mkProd o parentName instTys ts con
             _ -> do
-              ((:[]) . pure) <$> mkProd o parentName instTys ts con
+              liftCons $ mkProd o parentName instTys ts con
         _ -> do
           let tyVars = prettyTyVars instTys
           let protos = map (ConE . mkName . show) dataProtocols
@@ -1235,6 +1334,31 @@ mkLabel Options{fieldLabelModifier} = AppE (ConE 'Just)
   . TS.pack
   . show
 
+mkNewtypeInstanceAlias :: ()
+  => [Type]
+     -- ^ type variables
+  -> ConstructorInfo
+     -- ^ constructor info
+  -> ShwiftyM Match
+mkNewtypeInstanceAlias (stripConT -> instTys) = \case
+  ConstructorInfo
+    { constructorFields = [field]
+    , ..
+    } -> do
+      let tyVars = prettyTyVars instTys
+      lift $ match
+        (conP 'Proxy [])
+        (normalB
+          $ pure
+          $ RecConE 'TypeAlias
+          $ [ (mkName "name", unqualName constructorName)
+            , (mkName "tyVars", tyVars)
+            , (mkName "typ", toSwiftECxt field)
+            ]
+        )
+        []
+  _ -> throwError $ ExpectedNewtypeInstance
+
 mkNewtypeInstance :: ()
   => Options
      -- ^ encoding options
@@ -1269,6 +1393,34 @@ mkNewtypeInstance o@Options{dataProtocols} (stripConT -> instTys) ts = \case
         )
        []
   _ -> throwError ExpectedNewtypeInstance
+
+-- make a newtype into a type alias
+mkTypeAlias :: ()
+  => Name
+     -- ^ type name
+  -> [Type]
+     -- ^ type variables
+  -> ConstructorInfo
+     -- ^ constructor info
+  -> ShwiftyM Match
+mkTypeAlias typName instTys = \case
+  ConstructorInfo
+    { constructorFields = [field]
+    , ..
+    } -> do
+      let tyVars = prettyTyVars instTys
+      lift $ match
+        (conP 'Proxy [])
+        (normalB
+          $ pure
+          $ RecConE 'TypeAlias
+          $ [ (mkName "name", unqualName typName)
+            , (mkName "tyVars", tyVars)
+            , (mkName "typ", toSwiftECxt field)
+            ]
+        )
+        []
+  _ -> throwError $ NotANewtype typName
 
 -- | Make a single-constructor product (struct)
 mkProd :: ()
@@ -1580,6 +1732,9 @@ data KindStatus
     --   FlexibleInstance. our old check for
     --   `canRealiseKindStar` didn't check for
     --   `ConT` - where this would happen.
+    --
+    --   TODO: Now i think this might need to be
+    --   removed in favour of something smarter.
 
 -- can we realise the type's kind to *?
 canRealiseKindStar :: Type -> KindStatus
@@ -1625,9 +1780,9 @@ toSwiftECxt (unSigT -> typ) = AppE
 -- polymorphic types do not require a 'swift'
 -- instance, since we fill them in with 'SingSymbol'.
 --
--- We do this by stretching out a type along its spine,
--- completely. we then fill in any polymorphic
--- variables with 'SingSymbol', relfecting the type
+-- We do this by stretching out a type along its
+-- spine, completely. we then fill in any polymorphic
+-- variables with 'SingSymbol', reflecting the type
 -- Name to a Symbol. then we compress the spine to
 -- get the original type. the 'Swift' instance for
 -- 'SingSymbol' gets us where we need to go.
