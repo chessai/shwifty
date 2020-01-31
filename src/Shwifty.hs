@@ -62,6 +62,8 @@ module Shwifty
   , dataProtocols
   , dataRawValue
   , typeAlias
+  , lowerFirstCase
+  , lowerFirstField
     -- ** Default 'Options'
   , defaultOptions
 
@@ -357,6 +359,18 @@ data Options = Options
     --
     --   The default ('False') will generate newtypes
     --   as their own structs.
+  , lowerFirstField :: Bool
+    -- ^ Whether or not to lower-case the first
+    --   character of a field after applying all
+    --   modifiers to it.
+    --
+    --   The default ('True') will do so.
+  , lowerFirstCase :: Bool
+    -- ^ Whether or not to lower-case the first
+    --   character of a case after applying all
+    --   modifiers to it.
+    --
+    --   The default ('True') will do so.
   }
 
 -- | The default 'Options'.
@@ -374,6 +388,8 @@ data Options = Options
 --   , dataProtocols = []
 --   , dataRawValue = Nothing
 --   , typeAlias = False
+--   , lowerFirstField = True
+--   , lowerFirstCase = True
 --   }
 -- @
 --
@@ -389,6 +405,8 @@ defaultOptions = Options
   , dataProtocols = []
   , dataRawValue = Nothing
   , typeAlias = False
+  , lowerFirstField = True
+  , lowerFirstCase = True
   }
 
 -- | The class for things which can be converted to
@@ -1325,11 +1343,20 @@ caseField o n typ = TupE
   , toSwiftEPoly typ
   ]
 
+onHeadWith :: Bool -> String -> String
+onHeadWith toLower = if toLower
+  then onHead Char.toLower
+  else id
+
+-- apply a function only to the head of a string
+onHead :: (Char -> Char) -> String -> String
+onHead f = \case { [] -> []; (x:xs) -> f x : xs }
+
 mkLabel :: Options -> Name -> Exp
-mkLabel Options{fieldLabelModifier} = AppE (ConE 'Just)
+mkLabel Options{..} = AppE (ConE 'Just)
   . stringE
   . fieldLabelModifier
-  . onHead Char.toLower
+  . onHeadWith lowerFirstField
   . TS.unpack
   . last
   . TS.splitOn "."
@@ -1513,11 +1540,15 @@ mkProd o@Options{dataProtocols} typName instTys ts = \case
 --     case mkBar2
 --   }
 caseName :: Options -> Name -> Exp
-caseName Options{constructorModifier} = stringE . onHead Char.toLower . constructorModifier . TS.unpack . last . TS.splitOn "." . TS.pack . show
-
--- apply a function only to the head of a string
-onHead :: (Char -> Char) -> String -> String
-onHead f = \case { [] -> []; (x:xs) -> f x : xs }
+caseName Options{..} = id
+  . stringE
+  . onHeadWith lowerFirstCase
+  . constructorModifier
+  . TS.unpack
+  . last
+  . TS.splitOn "."
+  . TS.pack
+  . show
 
 -- remove qualifiers from a name, turn into String
 nameStr :: Name -> String
@@ -1548,8 +1579,8 @@ getFreeTyVar = \case
 
 -- make a struct field pretty
 prettyField :: Options -> Name -> Type -> Exp
-prettyField Options{fieldLabelModifier} name ty = TupE
-  [ (stringE (onHead Char.toLower (fieldLabelModifier (nameStr name))))
+prettyField Options{..} name ty = TupE
+  [ (stringE (onHeadWith lowerFirstField (fieldLabelModifier (nameStr name))))
   , toSwiftEPoly ty
   ]
 
