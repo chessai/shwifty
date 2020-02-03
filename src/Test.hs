@@ -23,6 +23,14 @@ import Data.Kind (Type)
 import Data.Void (Void)
 import qualified Data.UUID.Types
 
+newtype IsANewtype = MkIsANewtype { getIsANewtype :: String }
+$(getShwiftyWith (defaultOptions { newtypeTag = True }) ''IsANewtype)
+
+data ContainsANewtype = ContainsANewtype
+  { fieldIsANewtype :: IsANewtype
+  }
+getShwifty ''ContainsANewtype
+
 data HasRawValue = H1 | H2
 $(getShwiftyWith (defaultOptions { dataRawValue = Just Str }) ''HasRawValue)
 
@@ -162,6 +170,8 @@ test = do
   testPrint @EnumTest
   testPrint @AliasTest
   testPrint @(AliasTestPoly X)
+  testPrint @IsANewtype
+  testPrint @ContainsANewtype
   --testPrint @(AliasTestArb X)
 
 testPrint :: forall a. ToSwiftData a => IO ()

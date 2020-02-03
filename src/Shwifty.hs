@@ -15,6 +15,7 @@
   , GADTs
   , KindSignatures
   , LambdaCase
+  , MultiWayIf
   , NamedFieldPuns
   , OverloadedStrings
   , PolyKinds
@@ -62,6 +63,7 @@ module Shwifty
   , dataProtocols
   , dataRawValue
   , typeAlias
+  , newtypeTag
   , lowerFirstCase
   , lowerFirstField
     -- ** Default 'Options'
@@ -359,6 +361,29 @@ data Options = Options
     --
     --   The default ('False') will generate newtypes
     --   as their own structs.
+  , newtypeTag :: Bool
+    -- ^ Whether or not to generate a newtype as an
+    --   empty enum with a tag. This is for type
+    --   safety reasons, but with retaining the
+    --   ability to have Codable conformance.
+    --
+    --   The default ('False') will not do this.
+    --
+    --   /Note/: This takes priority over 'typeAlias'.
+    --
+    --   /Note/: This option is not currently
+    --   supported for newtype instances.
+    --
+    --   -- === __Examples__
+    --
+    -- > newtype NonEmptyText = MkNonEmptyText String
+    -- > $(getShwiftyWith (defaultOptions { newtypeTag = True }) ''NonEmpyText)
+    --
+    -- @
+    -- enum NonEmptyTextTag {
+    --     typealias NonEmptyText = Tagged<NonEmptyTextTag, String>
+    -- }
+    -- @
   , lowerFirstField :: Bool
     -- ^ Whether or not to lower-case the first
     --   character of a field after applying all
@@ -388,6 +413,7 @@ data Options = Options
 --   , dataProtocols = []
 --   , dataRawValue = Nothing
 --   , typeAlias = False
+--   , newtypeTag = False
 --   , lowerFirstField = True
 --   , lowerFirstCase = True
 --   }
@@ -405,6 +431,7 @@ defaultOptions = Options
   , dataProtocols = []
   , dataRawValue = Nothing
   , typeAlias = False
+  , newtypeTag = False
   , lowerFirstField = True
   , lowerFirstCase = True
   }
@@ -918,7 +945,7 @@ getToSwift :: ()
   -> [ConstructorInfo]
      -- ^ constructors
   -> ShwiftyM [Dec]
-getToSwift Options{generateToSwift} parentName instTys tyVarBndrs variant cons = if generateToSwift
+getToSwift Options{..} parentName instTys tyVarBndrs variant cons = if generateToSwift
   then do
     instHead <- buildTypeInstance parentName ClassSwift instTys tyVarBndrs variant
     clauseTy <- case variant of
@@ -928,7 +955,7 @@ getToSwift Options{generateToSwift} parentName instTys tyVarBndrs variant cons =
         _ -> do
           throwError ExpectedNewtypeInstance
       _ -> do
-        typToSwift parentName instTys
+        typToSwift newtypeTag parentName instTys
     inst <- lift $ instanceD
       (pure [])
       (pure instHead)
@@ -1145,25 +1172,33 @@ newtypToSwift :: ()
      -- ^ type variables
   -> ShwiftyM Exp
 newtypToSwift conName (stripConT -> instTys) = do
-  typToSwift conName instTys
+  typToSwift False conName instTys
 
 typToSwift :: ()
-  => Name
+  => Bool
+     -- ^ is this a newtype tag?
+  -> Name
      -- ^ name of the type
   -> [Type]
      -- ^ type variables
   -> ShwiftyM Exp
-typToSwift parentName instTys = do
+typToSwift newtypeTag parentName instTys = do
   -- TODO: use '_' instead of matching
   value <- lift $ newName "value"
   let tyVars = map toSwiftECxt instTys
+  let name =
+        let parentStr = nameStr parentName
+            accessedName = if newtypeTag
+              then parentStr ++ "Tag." ++ parentStr
+              else parentStr
+        in stringE accessedName
   matches <- lift $ fmap ((:[]) . pure) $ do
     match
       (conP 'Proxy [])
       (normalB
         $ pure
         $ RecConE 'Concrete
-        $ [ (mkName "name", unqualName parentName)
+        $ [ (mkName "name", name)
           , (mkName "tyVars", ListE tyVars)
           ]
       )
@@ -1251,7 +1286,7 @@ consToSwift :: ()
   -> [ConstructorInfo]
      -- ^ constructors
   -> ShwiftyM Exp
-consToSwift o@Options{dataProtocols,dataRawValue,typeAlias} parentName instTys variant ts = \case
+consToSwift o@Options{..} parentName instTys variant ts = \case
   [] -> do
     throwError $ VoidType parentName
   cons -> do
@@ -1265,20 +1300,22 @@ consToSwift o@Options{dataProtocols,dataRawValue,typeAlias} parentName instTys v
       -- bad name
       matchesWorker :: ShwiftyM [Q Match]
       matchesWorker = case cons of
-        [con] -> do
+        [con] -> liftCons $ do
           case variant of
-            NewtypeInstance -> if typeAlias
-              then do
-                liftCons $ mkNewtypeInstanceAlias instTys con
-              else do
-                liftCons $ mkNewtypeInstance o instTys ts con
-            Newtype -> if typeAlias
-              then do
-                liftCons $ mkTypeAlias parentName instTys con
-              else do
-                liftCons $ mkProd o parentName instTys ts con
+            NewtypeInstance -> do
+              if | typeAlias -> do
+                     mkNewtypeInstanceAlias instTys con
+                 | otherwise -> do
+                     mkNewtypeInstance o instTys ts con
+            Newtype -> do
+              if | newtypeTag -> do
+                     mkTypeTag o parentName instTys con
+                 | typeAlias -> do
+                     mkTypeAlias parentName instTys con
+                 | otherwise -> do
+                     mkProd o parentName instTys ts con
             _ -> do
-              liftCons $ mkProd o parentName instTys ts con
+              mkProd o parentName instTys ts con
         _ -> do
           let tyVars = prettyTyVars instTys
           let protos = map (ConE . mkName . show) dataProtocols
@@ -1422,6 +1459,48 @@ mkNewtypeInstance o@Options{dataProtocols} (stripConT -> instTys) ts = \case
         )
        []
   _ -> throwError ExpectedNewtypeInstance
+
+-- make a newtype into an empty enum
+-- with a tag
+mkTypeTag :: ()
+  => Options
+     -- ^ options
+  -> Name
+     -- ^ type name
+  -> [Type]
+     -- ^ type variables
+  -> ConstructorInfo
+     -- ^ constructor info
+  -> ShwiftyM Match
+mkTypeTag Options{..} typName instTys = \case
+  ConstructorInfo
+    { constructorFields = [field]
+    , ..
+    } -> do
+      let tyVars = prettyTyVars instTys
+      let protos = map (ConE . mkName . show) dataProtocols
+      let raw = rawValueE dataRawValue
+      let parentName = nameStr typName ++ "Tag"
+      let tag = RecConE 'Tag
+            [ (mkName "name", unqualName typName)
+            , (mkName "parent", stringE parentName)
+            , (mkName "typ", toSwiftEPoly field)
+            ]
+      lift $ match
+        (conP 'Proxy [])
+        (normalB
+          $ pure
+          $ RecConE 'SwiftEnum
+          $ [ (mkName "name", stringE parentName)
+            , (mkName "tyVars", tyVars)
+            , (mkName "protocols", ListE protos)
+            , (mkName "cases", ListE [])
+            , (mkName "rawValue", raw)
+            , (mkName "tags", ListE [tag])
+            ]
+        )
+        []
+  _ -> throwError $ NotANewtype typName
 
 -- make a newtype into a type alias
 mkTypeAlias :: ()
