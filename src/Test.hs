@@ -23,6 +23,9 @@ import Data.Kind (Type)
 import Data.Void (Void)
 import qualified Data.UUID.Types
 
+data HasRawValue = H1 | H2
+$(getShwiftyWith (defaultOptions { dataRawValue = Just Str }) ''HasRawValue)
+
 newtype AliasTest = AliastTest Int
 $(getShwiftyWith (defaultOptions { typeAlias = True }) ''AliasTest)
 
@@ -75,7 +78,7 @@ getShwifty ''TypeThree
 data CommonPrefixSum
   = CommonPrefixSum1
   | CommonPrefixSum2
-$(getShwiftyWith (defaultOptions { fieldLabelModifier = drop 12, dataProtocols = [Hashable], dataRawValue = Just Str }) ''CommonPrefixSum)
+$(getShwiftyWith (defaultOptions { constructorModifier = drop 12, dataProtocols = [Hashable], dataRawValue = Just Str }) ''CommonPrefixSum)
 
 data CommonPrefix = CommonPrefix
   { commonPrefixA :: Int
@@ -174,7 +177,7 @@ testPrint = putStrLn $ prettySwiftData $ Proxy @a
 --data InfixConTest = Int :+: Int
 --getShwifty ''InfixConTest
 
---data KindVarRealisationTest (a :: Maybe k) = K
+--data KindVarRealisationTest (a :: Maybe k) = KindVarRealisationTest
 --getShwifty ''KindVarRealisationTest
 
 --data ExTypsTest = forall x y z. Ex x

@@ -1810,14 +1810,14 @@ toSwiftECxt (unSigT -> typ) = AppE
   (SigE (ConE 'Proxy) (AppT (ConT ''Proxy) typ))
 
 -- convert a type into a 'Ty'.
--- polymorphic types do not require a 'swift'
+-- polymorphic types do not require a 'ToSwift'
 -- instance, since we fill them in with 'SingSymbol'.
 --
 -- We do this by stretching out a type along its
 -- spine, completely. we then fill in any polymorphic
 -- variables with 'SingSymbol', reflecting the type
 -- Name to a Symbol. then we compress the spine to
--- get the original type. the 'Swift' instance for
+-- get the original type. the 'ToSwift' instance for
 -- 'SingSymbol' gets us where we need to go.
 --
 -- Note that @compress . decompress@ is not
