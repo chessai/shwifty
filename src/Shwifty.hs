@@ -38,6 +38,14 @@
 --   documentation and examples of 'getShwifty'.
 --   See also 'getShwiftyWith'
 --   and 'getShwiftyWithTags'.
+--
+--   This library is in alpha and there are a number
+--   of known bugs which shouldn't affect most users.
+--   See the issue tracker to see what those are.
+--
+--   There are probably many bugs/some weird behaviour
+--   when it comes to data families. Please report
+--   any issues on the issue tracker.
 module Shwifty
   ( -- * Classes for conversion
     ToSwift(..)
@@ -73,6 +81,7 @@ module Shwifty
   , defaultOptions
 
     -- * Pretty-printing
+    -- ** Functions
   , prettyTy
   , prettySwiftData
     -- ** Re-exports
@@ -163,7 +172,7 @@ data Ty
     -- ^ Either type
     --
     --   /Note/: The error type in Swift must
-    --   implement the 'Error' protocol. This library
+    --   implement the @Error@ protocol. This library
     --   currently does not enforce this.
   | Set Ty
     -- ^ Set type
@@ -199,7 +208,7 @@ data Ty
         --   tags with the same type. This is needed
         --   to maintain safety.
       }
-    -- ^ A 'Tagged' typealias, for newtyping
+    -- ^ A @Tagged@ typealias, for newtyping
     --   in a way that doesn't break Codable.
     --
     --   See 'getShwiftyWithTags' for examples.
@@ -734,7 +743,7 @@ ensureEnabled ext = do
 --   for your type. 'ToSwift' instances are typically
 --   used to build cases or fields, whereas
 --   'ToSwiftData' instances are for building structs
---   and enums. Click the 'Examples' button to see
+--   and enums. Click the @Examples@ button to see
 --   examples of what Swift gets generated in
 --   different scenarios. To get access to the
 --   generated code, you will have to use one of
@@ -871,12 +880,8 @@ getShwifty :: Name -> Q [Dec]
 getShwifty = getShwiftyWith defaultOptions
 
 -- | Like 'getShwifty', but lets you supply
---   your own 'Options'. Usage:
---
--- @$(getShwiftyWith myOptions ''MyType)@
---
---   See the examples for some clarification of its
---   capabilities.
+--   your own 'Options'. Click the examples
+--   for some clarification of what you can do.
 --
 -- === __Examples__
 --
@@ -894,7 +899,7 @@ getShwifty = getShwiftyWith defaultOptions
 -- > $(getShwiftyWith (defaultOptions { constructorModifier = drop (length "MkPrefixedCons"), dataProtocols = [Codable] }) ''PrefixedCons)
 --
 -- @
--- enum PrefixedCons {
+-- enum PrefixedCons: Codable {
 --     case left
 --     case right
 -- }
