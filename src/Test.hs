@@ -15,6 +15,8 @@
 
 --{-# options_ghc -ddump-splices #-}
 
+{-# options_ghc -Wtype-defaults #-}
+
 module Test where
 
 import Shwifty
