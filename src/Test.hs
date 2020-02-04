@@ -23,6 +23,16 @@ import Data.Kind (Type)
 import Data.Void (Void)
 import qualified Data.UUID.Types
 
+data Fun a b = MkFun
+  { fun :: Int -> Char -> Bool -> String -> Either a b
+  }
+getShwifty ''Fun
+
+newtype Lol = MkLol String
+newtype Haha = MkHaha String
+data Laughs = MkLaughs { lol :: Lol, haha :: Haha }
+$(getShwiftyWithTags defaultOptions [ ''Lol, ''Haha ] ''Laughs)
+
 newtype IsANewtype = MkIsANewtype { getIsANewtype :: String }
 $(getShwiftyWith (defaultOptions { newtypeTag = True }) ''IsANewtype)
 
@@ -172,6 +182,8 @@ test = do
   testPrint @(AliasTestPoly X)
   testPrint @IsANewtype
   testPrint @ContainsANewtype
+  testPrint @Laughs
+  testPrint @(Fun X X)
   --testPrint @(AliasTestArb X)
 
 testPrint :: forall a. ToSwiftData a => IO ()
