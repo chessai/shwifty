@@ -9,6 +9,7 @@
   , TypeApplications
   , DuplicateRecordFields
   , TypeFamilies
+  , TypeOperators
   , QuantifiedConstraints
   , FlexibleInstances
 #-}
@@ -24,6 +25,22 @@ import Data.Proxy
 import Data.Kind (Type)
 import Data.Void (Void)
 import qualified Data.UUID.Types
+
+data CodecTest a = CodecTest
+  { codecTestOne :: a
+  , codecTestTwo :: Int
+  }
+$( getShwiftyCodec
+     (Codec @
+       (   Drop 'Field "codecTest"
+         & Implement 'Codable
+         & DontGenerate ToSwift
+         & OmitField "codecTestOne"
+       )
+     )
+
+     ''CodecTest
+ )
 
 data Fun a b = MkFun
   { fun :: Int -> Char -> Bool -> String -> Either a b
@@ -186,6 +203,7 @@ test = do
   testPrint @ContainsANewtype
   testPrint @Laughs
   testPrint @(Fun X X)
+  testPrint @(CodecTest X)
   --testPrint @(AliasTestArb X)
 
 testPrint :: forall a. ToSwiftData a => IO ()
