@@ -60,6 +60,7 @@ module Shwifty
   , getShwiftyWithTags
 
   , getShwiftyCodec
+  , getShwiftyCodecTags
 
     -- * Types
   , Ty(..)
@@ -2240,8 +2241,15 @@ stripConT = mapMaybe noConT
       ConT {} -> Nothing
       t -> Just t
 
+-- | Like 'getShwiftyWith', but with a 'Codec'
+--   instead of 'Options'.
 getShwiftyCodec :: forall tag. ModifyOptions tag => Codec tag -> Name -> Q [Dec]
-getShwiftyCodec _ n = getShwiftyWith (modifyOptions @tag defaultOptions) n
+getShwiftyCodec c = getShwiftyCodecTags c []
+
+-- | Like 'getShwiftyWithTags', but with a 'Codec'
+--   instead of 'Options'.
+getShwiftyCodecTags :: forall tag. ModifyOptions tag => Codec tag -> [Name] -> Name -> Q [Dec]
+getShwiftyCodecTags _ ts n = getShwiftyWithTags (modifyOptions @tag defaultOptions) ts n
 
 -- | Modify options.
 class ModifyOptions tag where
