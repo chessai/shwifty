@@ -10,7 +10,6 @@
   , DeriveLift
   , DeriveTraversable
   , DerivingStrategies
-  , DuplicateRecordFields
   , FlexibleInstances
   , GADTs
   , KindSignatures
@@ -216,23 +215,23 @@ data Ty
   | Poly String
     -- ^ polymorphic type variable
   | Concrete
-      { name :: String
+      { concreteName :: String
         -- ^ the name of the type
-      , tyVars :: [Ty]
+      , concreteTyVars :: [Ty]
         -- ^ the type's type variables
       }
     -- ^ a concrete type variable, and its
     --   type variables. Will typically be generated
     --   by 'getShwifty'.
   | Tag
-      { name :: String
+      { tagName :: String
         -- ^ the name of the type
-      , parent :: String
+      , tagParent :: String
         -- ^ the type constructor of the type
         --   to which this alias belongs
-      , typ :: Ty
+      , tagTyp :: Ty
         -- ^ the type that this represents
-      , disambiguate :: Bool
+      , tagDisambiguate :: Bool
         -- ^ does the type need disambiguation?
         --
         --   This will happen if there are multiple
@@ -256,40 +255,35 @@ data Ty
 --   two or more constructors will be converted to an
 --   enum. Types with 0 constructors will be converted
 --   to an empty enum.
---
---   /Note/: There seems to be a haddock bug related
---   to `-XDuplicateRecordFields` which
---   causes the haddocks for the fields of 'SwiftEnum'
---   to refer to struct.
 data SwiftData
   = SwiftStruct
-      { name :: String
+      { structName :: String
         -- ^ The name of the struct
-      , tyVars :: [String]
+      , structTyVars :: [String]
         -- ^ The struct's type variables
-      , protocols :: [Protocol]
+      , structProtocols :: [Protocol]
         -- ^ The protocols which the struct
         --   implements
-      , fields :: [(String, Ty)]
+      , structFields :: [(String, Ty)]
         -- ^ The fields of the struct. the pair
         --   is interpreted as (name, type).
-      , tags :: [Ty]
+      , structTags :: [Ty]
         -- ^ The tags of the struct. See 'Tag'.
       }
     -- ^ A struct (product type)
   | SwiftEnum
-      { name :: String
+      { enumName :: String
         -- ^ The name of the enum
-      , tyVars :: [String]
+      , enumTyVars :: [String]
         -- ^ The enum's type variables
-      , protocols :: [Protocol]
+      , enumProtocols :: [Protocol]
         -- ^ The protocols which the enum
         --   implements
-      , cases :: [(String, [(Maybe String, Ty)])]
+      , enumCases :: [(String, [(Maybe String, Ty)])]
         -- ^ The cases of the enum. the type
         --   can be interpreted as
         --   (name, [(label, type)]).
-      , rawValue :: Maybe Ty
+      , enumRawValue :: Maybe Ty
         -- ^ The rawValue of an enum. See
         --   https://developer.apple.com/documentation/swift/rawrepresentable/1540698-rawvalue
         --
@@ -299,16 +293,16 @@ data SwiftData
         --   /Note/: Currently, nothing will prevent
         --   you from putting something
         --   nonsensical here.
-      , tags :: [Ty]
+      , enumTags :: [Ty]
         -- ^ The tags of the struct. See 'Tag'.
       }
     -- ^ An enum (sum type)
-  | TypeAlias
-      { name :: String
+  | SwiftAlias
+      { aliasName :: String
         -- ^ the name of the type alias
-      , tyVars :: [String]
+      , aliasTyVars :: [String]
         -- ^ the type variables of the type alias
-      , typ :: Ty
+      , aliasTyp :: Ty
         -- ^ the type this represents (RHS)
       }
     -- ^ A /top-level/ type alias
@@ -663,7 +657,7 @@ prettyTy = \case
     ++ "<"
     ++ intercalate ", " (map prettyTy tys)
     ++ ">"
-  Tag {name,parent} -> parent ++ "." ++ name
+  Tag {..} -> tagParent ++ "." ++ tagName
 
 prettyApp :: Ty -> Ty -> String
 prettyApp t1 t2 = "(("
@@ -690,16 +684,16 @@ prettyProtocols = \case
 prettyTags :: String -> [Ty] -> String
 prettyTags indents = go where
   go [] = ""
-  go (Tag{name,parent,typ,disambiguate}:ts) = []
+  go (Tag{..}:ts) = []
     ++ "\n"
-    ++ prettyTagDisambiguator disambiguate indents name
+    ++ prettyTagDisambiguator tagDisambiguate indents tagName
     ++ indents
     ++ "typealias "
-    ++ name
+    ++ tagName
     ++ " = Tagged<"
-    ++ (if disambiguate then name ++ "Tag" else parent)
+    ++ (if tagDisambiguate then tagName ++ "Tag" else tagParent)
     ++ ", "
-    ++ prettyTy typ
+    ++ prettyTy tagTyp
     ++ ">"
     ++ go ts
   go _ = error "non-tag supplied to prettyTags"
@@ -729,15 +723,15 @@ prettySwiftDataWith :: ()
   -> String
 prettySwiftDataWith indent = \case
 
-  SwiftEnum {name,tyVars,protocols,cases,rawValue,tags} -> []
+  SwiftEnum {..} -> []
     ++ "enum "
-    ++ prettyTypeHeader name tyVars
-    ++ prettyRawValueAndProtocols rawValue protocols
+    ++ prettyTypeHeader enumName enumTyVars
+    ++ prettyRawValueAndProtocols enumRawValue enumProtocols
     ++ " {"
-    ++ newlineNonEmpty cases
-    ++ go cases
-    ++ prettyTags indents tags
-    ++ newlineNonEmpty tags
+    ++ newlineNonEmpty enumCases
+    ++ go enumCases
+    ++ prettyTags indents enumTags
+    ++ newlineNonEmpty enumTags
     ++ "}"
     where
       go [] = ""
@@ -755,24 +749,26 @@ prettySwiftDataWith indent = \case
         ++ (intercalate ", " (map (uncurry labelCase) cs))
         ++ ")\n"
         ++ go xs
-  SwiftStruct {name,tyVars,protocols,fields,tags} -> []
+
+  SwiftStruct {..} -> []
     ++ "struct "
-    ++ prettyTypeHeader name tyVars
-    ++ prettyProtocols protocols
+    ++ prettyTypeHeader structName structTyVars
+    ++ prettyProtocols structProtocols
     ++ " {"
-    ++ newlineNonEmpty fields
-    ++ go fields
-    ++ prettyTags indents tags
-    ++ newlineNonEmpty tags
+    ++ newlineNonEmpty structFields
+    ++ go structFields
+    ++ prettyTags indents structTags
+    ++ newlineNonEmpty structTags
     ++ "}"
     where
       go [] = ""
       go ((fieldName,ty):fs) = indents ++ "let " ++ fieldName ++ ": " ++ prettyTy ty ++ "\n" ++ go fs
-  TypeAlias {name, tyVars, typ} -> []
+
+  SwiftAlias{..} -> []
     ++ "typealias "
-    ++ prettyTypeHeader name tyVars
+    ++ prettyTypeHeader aliasName aliasTyVars
     ++ " = "
-    ++ prettyTy typ
+    ++ prettyTy aliasTyp
   where
     indents = replicate indent ' '
 
@@ -1011,10 +1007,10 @@ getTags parentName ts = do
         [ty] -> pure ty
         _ -> throwError $ NotANewtype newtypeName
       let tag = RecConE 'Tag
-            [ (mkName "name", unqualName tyconName)
-            , (mkName "parent", unqualName parentName)
-            , (mkName "typ", toSwiftEPoly typ)
-            , (mkName "disambiguate", unType disambiguate)
+            [ (mkName "tagName", unqualName tyconName)
+            , (mkName "tagParent", unqualName parentName)
+            , (mkName "tagTyp", toSwiftEPoly typ)
+            , (mkName "tagDisambiguate", unType disambiguate)
             ]
 
       -- generate the instance
@@ -1170,7 +1166,6 @@ getShwiftyWithTags o@Options{..} ts name = do
   r <- runExceptT $ do
     ensureEnabled ScopedTypeVariables
     ensureEnabled DataKinds
-    ensureEnabled DuplicateRecordFields
     DatatypeInfo
       { datatypeName = parentName
       , datatypeVars = tyVarBndrs
@@ -1304,19 +1299,9 @@ tagToSwift :: ()
 tagToSwift tyconName typ parentName = do
   -- TODO: use '_' instead of matching
   value <- lift $ newName "value"
-  matches <- lift $ fmap ((:[]) . pure) $ do
-    match
-      (conP 'Proxy [])
-      (normalB
-        $ pure
-        $ RecConE 'Tag
-        $ [ (mkName "name", unqualName tyconName)
-          , (mkName "parent", unqualName parentName)
-          , (mkName "typ", toSwiftECxt typ)
-          , (mkName "disambiguate", (ConE 'False))
-          ]
-      )
-      []
+  ourMatch <- matchProxy
+    $ tagExp tyconName parentName typ False
+  let matches = [pure ourMatch]
   lift $ lamE [varP value] (caseE (varE value) matches)
 newtypToSwift :: ()
   => Name
@@ -1345,17 +1330,12 @@ typToSwift newtypeTag parentName instTys = do
               then parentStr ++ "Tag." ++ parentStr
               else parentStr
         in stringE accessedName
-  matches <- lift $ fmap ((:[]) . pure) $ do
-    match
-      (conP 'Proxy [])
-      (normalB
-        $ pure
-        $ RecConE 'Concrete
-        $ [ (mkName "name", name)
-          , (mkName "tyVars", ListE tyVars)
-          ]
-      )
-      []
+  ourMatch <- matchProxy
+    $ RecConE 'Concrete
+    $ [ (mkName "concreteName", name)
+      , (mkName "concreteTyVars", ListE tyVars)
+      ]
+  let matches = [pure ourMatch]
   lift $ lamE [varP value] (caseE (varE value) matches)
 
 rawValueE :: Maybe Ty -> Exp
@@ -1396,31 +1376,27 @@ tyE = \case
   Dictionary e1 e2 -> AppE (AppE (ConE 'Dictionary) (tyE e1)) (tyE e2)
   App e1 e2 -> AppE (AppE (ConE 'App) (tyE e1)) (tyE e2)
   Array e -> AppE (ConE 'Array) (tyE e)
-  Tag{name,parent,typ,disambiguate} -> AppE (AppE (AppE (AppE (ConE 'Tag) (stringE name)) (stringE parent)) (tyE typ)) (if disambiguate then ConE 'True else ConE 'False)
+  Tag{..} -> AppE (AppE (AppE (AppE (ConE 'Tag) (stringE tagName)) (stringE tagParent)) (tyE tagTyp)) (if tagDisambiguate then ConE 'True else ConE 'False)
 
 mkClausePretty :: ()
   => Options
   -> ShwiftyM Exp
 mkClausePretty Options{..} = do
   value <- lift $ newName "value"
-  matches <- lift $ do
-    x <- match
-      (conP 'Proxy [])
-      (normalB
-        $ pure
-        $ AppE
-            (AppE
-              (VarE 'prettySwiftDataWith)
-              (LitE (IntegerL (fromIntegral indent)))
-            )
-        $ ParensE
-            (AppE
-              (VarE 'toSwiftData)
-              (VarE value)
-            )
+  ourMatch <- matchProxy
+    (AppE
+      (AppE
+        (VarE 'prettySwiftDataWith)
+        (LitE (IntegerL (fromIntegral indent)))
       )
-      []
-    pure [pure x]
+      (ParensE
+        (AppE
+          (VarE 'toSwiftData)
+          (VarE value)
+        )
+      )
+    )
+  let matches = [pure ourMatch]
   lift $ lamE [varP value] (caseE (varE value) matches)
 
 consToSwift :: ()
@@ -1468,27 +1444,12 @@ consToSwift o@Options{..} parentName instTys variant ts = \case
             _ -> do
               mkProd o parentName instTys ts con
         _ -> do
-          let tyVars = prettyTyVars instTys
-          let protos = map (ConE . mkName . show) dataProtocols
-          let raw = rawValueE dataRawValue
-          let tags = ListE ts
           -- omit the cases we don't want
           let cons' = flip filter cons $ \ConstructorInfo{..} -> not (nameStr constructorName `elem` omitCases)
           cases <- forM cons' (liftEither . mkCase o)
-          pure $ (:[]) $ match
-            (conP 'Proxy [])
-            (normalB
-               $ pure
-               $ RecConE 'SwiftEnum
-               $ [ (mkName "name", unqualName parentName)
-                 , (mkName "tyVars", tyVars)
-                 , (mkName "protocols", ListE protos)
-                 , (mkName "cases", ListE cases)
-                 , (mkName "rawValue", raw)
-                 , (mkName "tags", tags)
-                 ]
-            )
-            []
+          ourMatch <- matchProxy
+            $ enumExp parentName instTys dataProtocols cases dataRawValue ts
+          pure [pure ourMatch]
 
 liftCons :: (Functor f, Applicative g) => f a -> f ([g a])
 liftCons x = ((:[]) . pure) <$> x
@@ -1564,20 +1525,15 @@ mkNewtypeInstanceAlias :: ()
   -> ShwiftyM Match
 mkNewtypeInstanceAlias (stripConT -> instTys) = \case
   ConstructorInfo
-    { constructorFields = [field]
+    { constructorName = conName
+    , constructorFields = [field]
     , ..
     } -> do
-      let tyVars = prettyTyVars instTys
       lift $ match
         (conP 'Proxy [])
         (normalB
-          $ pure
-          $ RecConE 'TypeAlias
-          $ [ (mkName "name", unqualName constructorName)
-            , (mkName "tyVars", tyVars)
-            , (mkName "typ", toSwiftECxt field)
-            ]
-        )
+          (pure
+            (aliasExp conName instTys field)))
         []
   _ -> throwError $ ExpectedNewtypeInstance
 
@@ -1597,23 +1553,8 @@ mkNewtypeInstance o@Options{dataProtocols} (stripConT -> instTys) ts = \case
     , constructorFields = [field]
     , ..
     } -> do
-      let tyVars = prettyTyVars instTys
-      let protos = ListE $ map (ConE . mkName . show) dataProtocols
-      let fields = ListE $ [prettyField o fieldName field]
-      let tags = ListE ts
-      lift $ match
-        (conP 'Proxy [])
-        (normalB
-          $ pure
-          $ RecConE 'SwiftStruct
-          $ [ (mkName "name", unqualName constructorName)
-            , (mkName "tyVars", tyVars)
-            , (mkName "protocols", protos)
-            , (mkName "fields", fields)
-            , (mkName "tags", tags)
-            ]
-        )
-       []
+      let fields = [prettyField o fieldName field]
+      matchProxy $ structExp constructorName instTys dataProtocols fields ts
   _ -> throwError ExpectedNewtypeInstance
 
 -- make a newtype into an empty enum
@@ -1633,30 +1574,11 @@ mkTypeTag Options{..} typName instTys = \case
     { constructorFields = [field]
     , ..
     } -> do
-      let tyVars = prettyTyVars instTys
-      let protos = map (ConE . mkName . show) dataProtocols
-      let raw = rawValueE dataRawValue
-      let parentName = nameStr typName ++ "Tag"
-      let tag = RecConE 'Tag
-            [ (mkName "name", unqualName typName)
-            , (mkName "parent", stringE parentName)
-            , (mkName "typ", toSwiftEPoly field)
-            , (mkName "disambiguate", ConE 'False)
-            ]
-      lift $ match
-        (conP 'Proxy [])
-        (normalB
-          $ pure
-          $ RecConE 'SwiftEnum
-          $ [ (mkName "name", stringE parentName)
-            , (mkName "tyVars", tyVars)
-            , (mkName "protocols", ListE protos)
-            , (mkName "cases", ListE [])
-            , (mkName "rawValue", raw)
-            , (mkName "tags", ListE [tag])
-            ]
-        )
-        []
+      let parentName = mkName
+            (nameStr typName ++ "Tag")
+      let tag = tagExp typName parentName field False
+      matchProxy $ enumExp parentName instTys dataProtocols [] dataRawValue [tag]
+
   _ -> throwError $ NotANewtype typName
 
 -- make a newtype into a type alias
@@ -1673,17 +1595,10 @@ mkTypeAlias typName instTys = \case
     { constructorFields = [field]
     , ..
     } -> do
-      let tyVars = prettyTyVars instTys
       lift $ match
         (conP 'Proxy [])
         (normalB
-          $ pure
-          $ RecConE 'TypeAlias
-          $ [ (mkName "name", unqualName typName)
-            , (mkName "tyVars", tyVars)
-            , (mkName "typ", toSwiftECxt field)
-            ]
-        )
+          (pure (aliasExp typName instTys field)))
         []
   _ -> throwError $ NotANewtype typName
 
@@ -1696,22 +1611,8 @@ mkVoid :: ()
   -> [Exp]
      -- ^ tags
   -> ShwiftyM Match
-mkVoid typName instTys ts = do
-  let tyVars = prettyTyVars instTys
-  lift $ match
-    (conP 'Proxy [])
-    (normalB
-      $ pure
-      $ RecConE 'SwiftEnum
-      $ [ (mkName "name", unqualName typName)
-        , (mkName "tyVars", tyVars)
-        , (mkName "protocols", ListE [])
-        , (mkName "cases", ListE [])
-        , (mkName "rawValue", ConE 'Nothing)
-        , (mkName "tags", ListE ts)
-        ]
-    )
-    []
+mkVoid typName instTys ts = matchProxy
+  $ enumExp typName instTys [] [] Nothing ts
 
 -- | Make a single-constructor product (struct)
 mkProd :: ()
@@ -1733,22 +1634,7 @@ mkProd o@Options{dataProtocols} typName instTys ts = \case
     , constructorFields = []
     , ..
     } -> do
-      let tyVars = prettyTyVars instTys
-      let protos = map (ConE . mkName . show) dataProtocols
-      let tags = ListE ts
-      lift $ match
-        (conP 'Proxy [])
-        (normalB
-          $ pure
-          $ RecConE 'SwiftStruct
-          $ [ (mkName "name", unqualName typName)
-            , (mkName "tyVars", tyVars)
-            , (mkName "protocols", ListE protos)
-            , (mkName "fields", ListE [])
-            , (mkName "tags", tags)
-            ]
-        )
-        []
+      matchProxy $ structExp typName instTys dataProtocols [] ts
   -- single constructor, non-record (Normal)
   ConstructorInfo
     { constructorVariant = NormalConstructor
@@ -1766,23 +1652,8 @@ mkProd o@Options{dataProtocols} typName instTys ts = \case
     { constructorVariant = RecordConstructor fieldNames
     , ..
     } -> do
-      let tyVars = prettyTyVars instTys
-      let protos = map (ConE . mkName . show) dataProtocols
-      let fields = ListE $ zipFields o fieldNames constructorFields
-      let tags = ListE ts
-      lift $ match
-        (conP 'Proxy [])
-        (normalB
-          $ pure
-          $ RecConE 'SwiftStruct
-          $ [ (mkName "name", unqualName typName)
-            , (mkName "tyVars", tyVars)
-            , (mkName "protocols", ListE protos)
-            , (mkName "fields", fields)
-            , (mkName "tags", tags)
-            ]
-        )
-        []
+      let fields = zipFields o fieldNames constructorFields
+      matchProxy $ structExp typName instTys dataProtocols fields ts
 
 zipFields :: Options -> [Name] -> [Type] -> [Exp]
 zipFields o = zipWithPred p (prettyField o)
@@ -2393,3 +2264,91 @@ data OmitCase (cas :: Symbol)
 instance KnownSymbol cas => ModifyOptions (OmitCase cas) where
   modifyOptions options = options { omitCases = symbolVal (Proxy @cas) : omitCases options }
 
+-- | Construct a Type Alias.
+aliasExp :: ()
+  => Name
+     -- ^ alias name
+  -> [Type]
+     -- ^ type variables
+  -> Type
+     -- ^ type (RHS)
+  -> Exp
+aliasExp name tyVars field = RecConE 'SwiftAlias
+  [ (mkName "aliasName", unqualName name)
+  , (mkName "aliasTyVars", prettyTyVars tyVars)
+  , (mkName "aliasTyp", toSwiftECxt field)
+  ]
+
+-- | Construct a Tag.
+tagExp :: ()
+  => Name
+     -- ^ tycon name
+  -> Name
+     -- ^ parent name
+  -> Type
+     -- ^ type of the tag (RHS)
+  -> Bool
+     -- ^ Whether or not we are disambiguating.
+  -> Exp
+tagExp tyconName parentName typ dis = RecConE 'Tag
+  [ (mkName "tagName", unqualName tyconName)
+  , (mkName "tagParent", unqualName parentName)
+  , (mkName "tagTyp", toSwiftECxt typ)
+  , (mkName "tagDisambiguate", case dis of
+      { False -> ConE 'False
+      ; True  -> ConE 'True
+      })
+  ]
+
+-- | Construct an Enum.
+enumExp :: ()
+  => Name
+     -- ^ parent name
+  -> [Type]
+     -- ^ type variables
+  -> [Protocol]
+     -- ^ protocols
+  -> [Exp]
+     -- ^ cases
+  -> Maybe Ty
+     -- ^ Raw Value
+  -> [Exp]
+     -- ^ Tags
+  -> Exp
+enumExp parentName tyVars protos cases raw tags
+  = RecConE 'SwiftEnum
+      [ (mkName "enumName", unqualName parentName)
+      , (mkName "enumTyVars", prettyTyVars tyVars)
+      , (mkName "enumProtocols", ListE (map (ConE . mkName . show) protos))
+      , (mkName "enumCases", ListE cases)
+      , (mkName "enumRawValue", rawValueE raw)
+      , (mkName "enumTags", ListE tags)
+      ]
+
+-- | Construct a Struct.
+structExp :: ()
+  => Name
+     -- ^ struct name
+  -> [Type]
+     -- ^ type variables
+  -> [Protocol]
+     -- ^ protocols
+  -> [Exp]
+     -- ^ fields
+  -> [Exp]
+     -- ^ tags
+  -> Exp
+structExp name tyVars protos fields tags
+  = RecConE 'SwiftStruct
+      [ (mkName "structName", unqualName name)
+      , (mkName "structTyVars", prettyTyVars tyVars)
+      , (mkName "structProtocols", ListE (map (ConE . mkName . show) protos))
+      , (mkName "structFields", ListE fields)
+      , (mkName "structTags", ListE tags)
+      ]
+
+matchProxy :: Exp -> ShwiftyM Match
+matchProxy e = lift $ match
+  (conP 'Proxy [])
+  (normalB (pure e))
+  []

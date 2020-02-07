@@ -7,7 +7,6 @@
   , PolyKinds
   , GADTs
   , TypeApplications
-  , DuplicateRecordFields
   , TypeFamilies
   , TypeOperators
   , QuantifiedConstraints
@@ -76,7 +75,7 @@ newtype EnumTestTag = EnumTestTag Int
 
 data EnumTest
   = Enum1
-  | Enum2 { x :: Int }
+  | Enum2 { enumTestX :: Int }
 $(getShwiftyWithTags defaultOptions ([ ''EnumTestTag ]) ''EnumTest)
 
 class DataClass a where
@@ -85,7 +84,7 @@ class DataClass a where
 instance DataClass Int where
   newtype Key Int = IntKey { unIntKey :: Int }
 
-data HasTags = HasTags { x :: Int, y :: Int }
+data HasTags = HasTags { hasTagsX :: Int, hasTagsY :: Int }
 
 $(getShwiftyWithTags defaultOptions ([ 'IntKey ]) ''HasTags)
 
@@ -95,20 +94,20 @@ newtype TypeOneId = TypeOneId { getTypeOneId :: U }
 newtype TypeTwoId = TypeTwoId { getTypeTwoId :: U }
 
 data TypeOne = TypeOne
-  { id :: TypeOneId
-  , x :: Int
+  { typeOneId :: TypeOneId
+  , typeOneX :: Int
   }
 $(getShwiftyWithTags defaultOptions ([ ''TypeOneId ]) ''TypeOne)
 
 data TypeTwo = TypeTwo
-  { id :: TypeTwoId
-  , x :: Int
+  { typeTwoId :: TypeTwoId
+  , typeTwoX :: Int
   }
 $(getShwiftyWithTags defaultOptions ([ ''TypeTwoId ]) ''TypeTwo)
 
 data TypeThree = TypeThree
-  { hasExternalTag :: TypeTwoId
-  , x :: Int
+  { typeThreeHasExternalTag :: TypeTwoId
+  , typeThreeX :: Int
   }
 getShwifty ''TypeThree
 
