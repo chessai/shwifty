@@ -28,6 +28,7 @@ module Shwifty.Codec
   , DontLowercase
   , OmitField
   , OmitCase
+  , MakeBase
   ) where
 
 import Data.Kind (Constraint)
@@ -172,3 +173,9 @@ data OmitCase (cas :: Symbol)
 
 instance KnownSymbol cas => ModifyOptions (OmitCase cas) where
   modifyOptions options = options { omitCases = symbolVal (Proxy @cas) : omitCases options }
+
+-- | Make a base type
+data MakeBase
+
+instance ModifyOptions MakeBase where
+  modifyOptions options = options { makeBase = True }

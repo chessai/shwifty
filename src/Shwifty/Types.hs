@@ -131,6 +131,9 @@ data SwiftData
       , structFields :: [(String, Ty)]
         -- ^ The fields of the struct. the pair
         --   is interpreted as (name, type).
+      , structPrivateTypes :: [SwiftData]
+        -- ^ Private types of the struct. Typically
+        --   populated by setting 'makeBase'.
       , structTags :: [Ty]
         -- ^ The tags of the struct. See 'Tag'.
       }
@@ -157,6 +160,9 @@ data SwiftData
         --   /Note/: Currently, nothing will prevent
         --   you from putting something
         --   nonsensical here.
+      , enumPrivateTypes :: [SwiftData]
+        -- ^ Private types of the enum. Typically
+        --   populated by setting 'makeBase'.
       , enumTags :: [Ty]
         -- ^ The tags of the struct. See 'Tag'.
       }
@@ -294,4 +300,13 @@ data Options = Options
     --   generating types.
     --
     --   The default (@[]@) will omit nothing.
+  , makeBase :: Bool
+    -- ^ Whether or not to make a base version
+    --   type. Here, "base version" refers to a
+    --   version of the type without any fields.
+    --   This can be useful for doing Codable
+    --   conversions.
+    --
+    --   The default ('False') will not create the
+    --   base type.
   }

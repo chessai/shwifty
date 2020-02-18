@@ -97,6 +97,7 @@ module Shwifty
   , DontLowercase
   , OmitField
   , OmitCase
+  , MakeBase
 
     -- * Pretty-printing
     -- ** Functions
@@ -147,6 +148,7 @@ import Shwifty.Types
 --   , lowerFirstCase = True
 --   , omitFields = []
 --   , omitCases = []
+--   , makeBase = False
 --   }
 -- @
 --
@@ -166,6 +168,7 @@ defaultOptions = Options
   , lowerFirstCase = True
   , omitFields = []
   , omitCases = []
+  , makeBase = False
   }
 
 -- Used internally to reflect polymorphic type
@@ -375,11 +378,20 @@ data NewtypeInfo = NewtypeInfo
   , newtypeCon :: ConstructorInfo
   }
 
+-- | Reify a newtype.
 reifyNewtype :: Name -> ShwiftyM NewtypeInfo
 reifyNewtype n = do
   DatatypeInfo{..} <- lift $ reifyDatatype n
-  case datatypeCons of
-    [c] -> do
+  case (datatypeCons, datatypeVariant) of
+    ([c], Newtype) -> do
+      pure NewtypeInfo {
+        newtypeName = datatypeName
+      , newtypeVars = datatypeVars
+      , newtypeInstTypes = datatypeInstTypes
+      , newtypeVariant = datatypeVariant
+      , newtypeCon = c
+      }
+    ([c], NewtypeInstance) -> do
       pure NewtypeInfo {
         newtypeName = datatypeName
       , newtypeVars = datatypeVars
@@ -498,7 +510,7 @@ getToSwiftData :: ()
 getToSwiftData o@Options{..} parentName instTys tyVarBndrs variant tags cons = if generateToSwiftData
   then do
     instHead <- buildTypeInstance parentName ClassSwiftData instTys tyVarBndrs variant
-    clauseData <- consToSwift o parentName instTys variant tags cons
+    clauseData <- consToSwift o parentName instTys variant tags makeBase cons
     inst <- lift $ instanceD
       (pure [])
       (pure instHead)
@@ -798,10 +810,12 @@ consToSwift :: ()
      -- ^ data type variant
   -> [Exp]
      -- ^ tags
+  -> Bool
+     -- ^ Make base?
   -> [ConstructorInfo]
      -- ^ constructors
   -> ShwiftyM Exp
-consToSwift o@Options{..} parentName instTys variant ts = \case
+consToSwift o@Options{..} parentName instTys variant ts bs = \case
   [] -> do
     value <- lift $ newName "value"
     matches <- liftCons (mkVoid parentName instTys ts)
@@ -836,7 +850,7 @@ consToSwift o@Options{..} parentName instTys variant ts = \case
           let cons' = flip filter cons $ \ConstructorInfo{..} -> not (nameStr constructorName `elem` omitCases)
           cases <- forM cons' (liftEither . mkCase o)
           ourMatch <- matchProxy
-            $ enumExp parentName instTys dataProtocols cases dataRawValue ts
+            $ enumExp parentName instTys dataProtocols cases dataRawValue ts bs
           pure [pure ourMatch]
 
 liftCons :: (Functor f, Applicative g) => f a -> f ([g a])
@@ -935,14 +949,14 @@ mkNewtypeInstance :: ()
   -> ConstructorInfo
      -- ^ constructor info
   -> ShwiftyM Match
-mkNewtypeInstance o@Options{dataProtocols} (stripConT -> instTys) ts = \case
+mkNewtypeInstance o@Options{..} (stripConT -> instTys) ts = \case
   ConstructorInfo
     { constructorVariant = RecordConstructor [fieldName]
     , constructorFields = [field]
     , ..
     } -> do
       let fields = [prettyField o fieldName field]
-      matchProxy $ structExp constructorName instTys dataProtocols fields ts
+      matchProxy $ structExp constructorName instTys dataProtocols fields ts makeBase
   _ -> throwError ExpectedNewtypeInstance
 
 -- make a newtype into an empty enum
@@ -965,7 +979,7 @@ mkTypeTag Options{..} typName instTys = \case
       let parentName = mkName
             (nameStr typName ++ "Tag")
       let tag = tagExp typName parentName field False
-      matchProxy $ enumExp parentName instTys dataProtocols [] dataRawValue [tag]
+      matchProxy $ enumExp parentName instTys dataProtocols [] dataRawValue [tag] False
 
   _ -> throwError $ NotANewtype typName
 
@@ -1000,7 +1014,7 @@ mkVoid :: ()
      -- ^ tags
   -> ShwiftyM Match
 mkVoid typName instTys ts = matchProxy
-  $ enumExp typName instTys [] [] Nothing ts
+  $ enumExp typName instTys [] [] Nothing ts False
 
 -- | Make a single-constructor product (struct)
 mkProd :: ()
@@ -1015,14 +1029,14 @@ mkProd :: ()
   -> ConstructorInfo
      -- ^ constructor info
   -> ShwiftyM Match
-mkProd o@Options{dataProtocols} typName instTys ts = \case
+mkProd o@Options{..} typName instTys ts = \case
   -- single constructor, no fields
   ConstructorInfo
     { constructorVariant = NormalConstructor
     , constructorFields = []
     , ..
     } -> do
-      matchProxy $ structExp typName instTys dataProtocols [] ts
+      matchProxy $ structExp typName instTys dataProtocols [] ts makeBase
   -- single constructor, non-record (Normal)
   ConstructorInfo
     { constructorVariant = NormalConstructor
@@ -1041,7 +1055,7 @@ mkProd o@Options{dataProtocols} typName instTys ts = \case
     , ..
     } -> do
       let fields = zipFields o fieldNames constructorFields
-      matchProxy $ structExp typName instTys dataProtocols fields ts
+      matchProxy $ structExp typName instTys dataProtocols fields ts makeBase
 
 zipFields :: Options -> [Name] -> [Type] -> [Exp]
 zipFields o = zipWithPred p (prettyField o)
@@ -1560,14 +1574,17 @@ enumExp :: ()
      -- ^ Raw Value
   -> [Exp]
      -- ^ Tags
+  -> Bool
+     -- ^ Make base?
   -> Exp
-enumExp parentName tyVars protos cases raw tags
-  = RecConE 'SwiftEnum
+enumExp parentName tyVars protos cases raw tags bs
+  = applyBase bs $ RecConE 'SwiftEnum
       [ (mkName "enumName", unqualName parentName)
       , (mkName "enumTyVars", prettyTyVars tyVars)
       , (mkName "enumProtocols", ListE (map (ConE . mkName . show) protos))
       , (mkName "enumCases", ListE cases)
       , (mkName "enumRawValue", rawValueE raw)
+      , (mkName "enumPrivateTypes", ListE [])
       , (mkName "enumTags", ListE tags)
       ]
 
@@ -1583,13 +1600,16 @@ structExp :: ()
      -- ^ fields
   -> [Exp]
      -- ^ tags
+  -> Bool
+     -- ^ Make base?
   -> Exp
-structExp name tyVars protos fields tags
-  = RecConE 'SwiftStruct
+structExp name tyVars protos fields tags bs
+  = applyBase bs $ RecConE 'SwiftStruct
       [ (mkName "structName", unqualName name)
       , (mkName "structTyVars", prettyTyVars tyVars)
       , (mkName "structProtocols", ListE (map (ConE . mkName . show) protos))
       , (mkName "structFields", ListE fields)
+      , (mkName "structPrivateTypes", ListE [])
       , (mkName "structTags", ListE tags)
       ]
 
@@ -1598,3 +1618,28 @@ matchProxy e = lift $ match
   (conP 'Proxy [])
   (normalB (pure e))
   []
+
+stripFields :: SwiftData -> SwiftData
+stripFields = \case
+  s@SwiftStruct{} -> s { structFields = [] }
+  s@SwiftEnum{} -> s { enumCases = go (enumCases s) }
+    where
+      go = map stripOne
+      stripOne (x, _) = (x, [])
+  s -> s
+
+giveBase :: SwiftData -> SwiftData
+giveBase = \case
+  s@SwiftStruct{} -> s { structPrivateTypes = [stripFields s] }
+  s@SwiftEnum{} -> s { enumPrivateTypes = [stripFields s] }
+  s -> s
+
+-- | Apply 'giveBase' to a 'SwiftData'.
+--
+--   Ideally we would offload this into
+--   the first construction of the SwiftData,
+--   inside structExp/enumExp.
+applyBase :: Bool -> Exp -> Exp
+applyBase b = if b
+  then AppE (VarE 'giveBase) . ParensE
+  else id

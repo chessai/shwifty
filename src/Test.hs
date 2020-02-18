@@ -35,10 +35,23 @@ $( getShwiftyCodec
          & Implement 'Codable
          & DontGenerate ToSwift
          & OmitField "codecTestOne"
+         & MakeBase
        )
      )
 
      ''CodecTest
+ )
+
+data CodecSum a b
+  = CodecSumL a
+  | CodecSumR b
+$( getShwiftyCodec
+     (Codec @
+        (   MakeBase
+          & Drop 'DataCon "CodecSum"
+        )
+     )
+     ''CodecSum
  )
 
 data Fun a b = MkFun
@@ -203,6 +216,7 @@ test = do
   testPrint @Laughs
   testPrint @(Fun X X)
   testPrint @(CodecTest X)
+  testPrint @(CodecSum X X)
   --testPrint @(AliasTestArb X)
 
 testPrint :: forall a. ToSwiftData a => IO ()

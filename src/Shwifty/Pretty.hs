@@ -29,26 +29,12 @@ prettySwiftDataWith indent = \case
     ++ prettyRawValueAndProtocols enumRawValue enumProtocols
     ++ " {"
     ++ newlineNonEmpty enumCases
-    ++ go enumCases
+    ++ prettyEnumCases indents enumCases
+    ++ newlineNonEmpty enumPrivateTypes
+    ++ prettyPrivateTypes indents enumPrivateTypes
     ++ prettyTags indents enumTags
     ++ newlineNonEmpty enumTags
     ++ "}"
-    where
-      go [] = ""
-      go ((caseNm, []):xs) = []
-        ++ indents
-        ++ "case "
-        ++ caseNm
-        ++ "\n"
-        ++ go xs
-      go ((caseNm, cs):xs) = []
-        ++ indents
-        ++ "case "
-        ++ caseNm
-        ++ "("
-        ++ (intercalate ", " (map (uncurry labelCase) cs))
-        ++ ")\n"
-        ++ go xs
 
   SwiftStruct {..} -> []
     ++ "struct "
@@ -56,13 +42,12 @@ prettySwiftDataWith indent = \case
     ++ prettyProtocols structProtocols
     ++ " {"
     ++ newlineNonEmpty structFields
-    ++ go structFields
+    ++ prettyStructFields indents structFields
+    ++ newlineNonEmpty structPrivateTypes
+    ++ prettyPrivateTypes indents structPrivateTypes
     ++ prettyTags indents structTags
     ++ newlineNonEmpty structTags
     ++ "}"
-    where
-      go [] = ""
-      go ((fieldName,ty):fs) = indents ++ "let " ++ fieldName ++ ": " ++ prettyTy ty ++ "\n" ++ go fs
 
   SwiftAlias{..} -> []
     ++ "typealias "
@@ -178,3 +163,41 @@ prettyApp t1 t2 = "(("
     go e1 (App e2 e3) = case go e2 e3 of
       (args, ret) -> (e1 : args, ret)
     go e1 e2 = ([e1], e2)
+
+prettyEnumCases :: String -> [(String, [(Maybe String, Ty)])] -> String
+prettyEnumCases indents = go
+  where
+    go = \case
+      [] -> ""
+      ((caseNm, []):xs) -> []
+        ++ indents
+        ++ "case "
+        ++ caseNm
+        ++ "\n"
+        ++ go xs
+      ((caseNm, cs):xs) -> []
+        ++ indents
+        ++ "case "
+        ++ caseNm
+        ++ "("
+        ++ (intercalate ", " (map (uncurry labelCase) cs))
+        ++ ")\n"
+        ++ go xs
+
+prettyStructFields :: String -> [(String, Ty)] -> String
+prettyStructFields indents = go
+  where
+    go [] = ""
+    go ((fieldName,ty):fs) = indents ++ "let " ++ fieldName ++ ": " ++ prettyTy ty ++ "\n" ++ go fs
+
+prettyPrivateTypes :: String -> [SwiftData] -> String
+prettyPrivateTypes indents = go
+  where
+    go [] = ""
+    go (s:ss) = indents ++ "private " ++ unlines (onLast (indents ++) (lines (prettySwiftData s))) ++ go ss
+
+-- map a function over everything but the
+-- first element.
+onLast :: (a -> a) -> [a] -> [a]
+onLast f [] = []
+onLast f (x:xs) = x : map f xs
