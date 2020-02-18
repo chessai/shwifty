@@ -77,6 +77,7 @@ module Shwifty
   , lowerFirstField
   , omitFields
   , omitCases
+  , makeBase
     -- ** Default 'Options'
   , defaultOptions
 
@@ -148,7 +149,7 @@ import Shwifty.Types
 --   , lowerFirstCase = True
 --   , omitFields = []
 --   , omitCases = []
---   , makeBase = (False, [])
+--   , makeBase = (False, Nothing, [])
 --   }
 -- @
 --
@@ -168,7 +169,7 @@ defaultOptions = Options
   , lowerFirstCase = True
   , omitFields = []
   , omitCases = []
-  , makeBase = (False, [])
+  , makeBase = (False, Nothing, [])
   }
 
 -- Used internally to reflect polymorphic type
@@ -810,7 +811,7 @@ consToSwift :: ()
      -- ^ data type variant
   -> [Exp]
      -- ^ tags
-  -> (Bool, [Protocol])
+  -> (Bool, Maybe Ty, [Protocol])
      -- ^ Make base?
   -> [ConstructorInfo]
      -- ^ constructors
@@ -979,7 +980,7 @@ mkTypeTag Options{..} typName instTys = \case
       let parentName = mkName
             (nameStr typName ++ "Tag")
       let tag = tagExp typName parentName field False
-      matchProxy $ enumExp parentName instTys dataProtocols [] dataRawValue [tag] (False, [])
+      matchProxy $ enumExp parentName instTys dataProtocols [] dataRawValue [tag] (False, Nothing, [])
 
   _ -> throwError $ NotANewtype typName
 
@@ -1014,7 +1015,7 @@ mkVoid :: ()
      -- ^ tags
   -> ShwiftyM Match
 mkVoid typName instTys ts = matchProxy
-  $ enumExp typName instTys [] [] Nothing ts (False, [])
+  $ enumExp typName instTys [] [] Nothing ts (False, Nothing, [])
 
 -- | Make a single-constructor product (struct)
 mkProd :: ()
@@ -1574,7 +1575,7 @@ enumExp :: ()
      -- ^ Raw Value
   -> [Exp]
      -- ^ Tags
-  -> (Bool, [Protocol])
+  -> (Bool, Maybe Ty, [Protocol])
      -- ^ Make base?
   -> Exp
 enumExp parentName tyVars protos cases raw tags bs
@@ -1600,7 +1601,7 @@ structExp :: ()
      -- ^ fields
   -> [Exp]
      -- ^ tags
-  -> (Bool, [Protocol])
+  -> (Bool, Maybe Ty, [Protocol])
      -- ^ Make base?
   -> Exp
 structExp name tyVars protos fields tags bs
@@ -1640,10 +1641,10 @@ suffixBase = \case
   s@SwiftEnum{} -> s { enumName = enumName s ++ "Base" }
   s -> s
 
-giveBase :: [Protocol] -> SwiftData -> SwiftData
-giveBase ps = \case
+giveBase :: Maybe Ty -> [Protocol] -> SwiftData -> SwiftData
+giveBase r ps = \case
   s@SwiftStruct{} -> s { structPrivateTypes = [giveProtos ps (suffixBase (stripFields s))] }
-  s@SwiftEnum{} -> s { enumPrivateTypes = [giveProtos ps (suffixBase (stripFields s))] }
+  s@SwiftEnum{} -> s { enumPrivateTypes = [ giveProtos ps (suffixBase (stripFields s)) { enumRawValue = r }] }
   s -> s
 
 -- | Apply 'giveBase' to a 'SwiftData'.
@@ -1654,10 +1655,11 @@ giveBase ps = \case
 --
 --
 -- should we strip tyvars as well?
-applyBase :: (Bool, [Protocol]) -> Exp -> Exp
-applyBase (b, ps) = if b
-  then AppE (AppE (VarE 'giveBase) (protosExp ps)) . ParensE
-  else id
+applyBase :: (Bool, Maybe Ty, [Protocol]) -> Exp -> Exp
+applyBase (b, r, ps) (ParensE -> s) = if b
+  then
+    AppE (AppE (AppE (VarE 'giveBase) (rawValueE r)) (protosExp ps)) s
+  else s
 
 protosExp :: [Protocol] -> Exp
 protosExp = ListE . map (ConE . mkName . show)

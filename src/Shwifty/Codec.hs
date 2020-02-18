@@ -183,15 +183,16 @@ instance KnownSymbol cas => ModifyOptions (OmitCase cas) where
   modifyOptions options = options { omitCases = symbolVal (Proxy @cas) : omitCases options }
 
 -- | Make a base type
-data MakeBase (protocols :: [Protocol])
+data MakeBase (rawValue :: Maybe Ty) (protocols :: [Protocol])
 
-type family Protocols (protocols :: [Protocol]) :: * where
-  Protocols '[] = ()
-  Protocols (p ': ps) = Implement p & Protocols ps
-
-instance forall protocols. ProtocolList protocols => ModifyOptions (MakeBase protocols) where
+instance forall ty protocols. (CanBeRawValue ty, ProtocolList protocols) => ModifyOptions (MakeBase ('Just ty) protocols) where
   modifyOptions options = options
-    { makeBase = (,) True (protocolList @protocols)
+    { makeBase = (,,) True (Just (getRawValue @ty)) (protocolList @protocols)
+    }
+
+instance forall protocols. (ProtocolList protocols) => ModifyOptions (MakeBase 'Nothing protocols) where
+  modifyOptions options = options
+    { makeBase = (,,) True Nothing (protocolList @protocols)
     }
 
 data SomeProtocol where

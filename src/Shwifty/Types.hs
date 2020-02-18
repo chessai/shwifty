@@ -300,13 +300,15 @@ data Options = Options
     --   generating types.
     --
     --   The default (@[]@) will omit nothing.
-  , makeBase :: (Bool, [Protocol])
-    -- ^ Whether or not to make a base version
-    --   type. Here, "base version" refers to a
+  , makeBase :: (Bool, Maybe Ty, [Protocol])
+    -- ^ Whether or not to make a base type,
+    --   its raw value, and its protocols.
+    --
+    --   Here, "base type" refers to a
     --   version of the type without any fields.
     --   This can be useful for doing Codable
     --   conversions.
     --
-    --   The default ('False') will not create the
-    --   base type.
+    --   The default ('False', 'Nothing', @[]@)
+    --   will not create the base type.
   }

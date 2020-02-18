@@ -35,7 +35,7 @@ $( getShwiftyCodec
          & Implement 'Codable
          & DontGenerate ToSwift
          & OmitField "codecTestOne"
-         & MakeBase '[]
+         & MakeBase 'Nothing '[]
        )
      )
 
@@ -47,7 +47,7 @@ data CodecSum a b
   | CodecSumR b
 $( getShwiftyCodec
      (Codec @
-        (   MakeBase '[ Equatable, Hashable, Codable ]
+        (   MakeBase ('Just 'Str) '[ Equatable, Hashable, Codable ]
           & Drop 'DataCon "CodecSum"
         )
      )
