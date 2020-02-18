@@ -35,6 +35,11 @@ library
   exposed-modules:
     Shwifty
     --Test
+  other-modules:
+    Shwifty.Class
+    Shwifty.Codec
+    Shwifty.Pretty
+    Shwifty.Types
   build-depends:
     , base >= 4.11 && < 4.14
     , bytestring >= 0.10 && < 0.11

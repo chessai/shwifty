@@ -1,23 +1,17 @@
 {-# language
     AllowAmbiguousTypes
   , BangPatterns
-  , CPP
   , DataKinds
-  , DefaultSignatures
   , DeriveFoldable
   , DeriveFunctor
   , DeriveGeneric
-  , DeriveLift
   , DeriveTraversable
   , DerivingStrategies
   , FlexibleInstances
-  , GADTs
-  , KindSignatures
   , LambdaCase
   , MultiWayIf
   , NamedFieldPuns
   , OverloadedStrings
-  , PolyKinds
   , RecordWildCards
   , ScopedTypeVariables
   , TemplateHaskell
@@ -73,7 +67,6 @@ module Shwifty
   , fieldLabelModifier
   , constructorModifier
   , optionalExpand
-  , indent
   , generateToSwift
   , generateToSwiftData
   , dataProtocols
@@ -113,340 +106,27 @@ module Shwifty
   , X
   ) where
 
-#include "MachDeps.h"
-
 import Control.Monad.Except
-import Data.CaseInsensitive (CI)
 import Data.Foldable (foldlM,foldr',foldl')
 import Data.Functor ((<&>))
-import Data.Int (Int8,Int16,Int32,Int64)
-import Data.Kind (Constraint)
-import Data.List (intercalate)
 import Data.List.NonEmpty ((<|), NonEmpty(..))
 import Data.Maybe (mapMaybe, catMaybes)
 import Data.Proxy (Proxy(..))
-import Data.Time (UTCTime)
-import Data.UUID.Types (UUID)
-import Data.Vector (Vector)
 import Data.Void (Void)
-import Data.Word (Word8,Word16,Word32,Word64)
-import GHC.Generics (Generic)
-import GHC.TypeLits
-  ( Symbol, KnownSymbol, symbolVal
-  , Nat, KnownNat, natVal
-  , TypeError, ErrorMessage(..)
-  )
+import GHC.TypeLits (Symbol, KnownSymbol, symbolVal)
 import Language.Haskell.TH hiding (stringE)
 import Language.Haskell.TH.Datatype
-import Language.Haskell.TH.Syntax (Lift)
 import Prelude hiding (Enum(..))
-import qualified Data.ByteString as BS
-import qualified Data.ByteString.Lazy as BL
 import qualified Data.Char as Char
-import qualified Data.HashMap.Strict as HM
 import qualified Data.List as L
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map as M
 import qualified Data.Text as TS
-import qualified Data.Text.Lazy as TL
-import qualified Data.Primitive as Prim
 
--- | An AST representing a Swift type.
-data Ty
-  = Unit
-    -- ^ Unit (called "Unit/Void" in swift). Empty struct type.
-  | Bool
-    -- ^ Bool
-  | Character
-    -- ^ Character
-  | Str
-    -- ^ String. Named 'Str' to avoid conflicts with
-    --   'Data.Aeson.String'.
-  | I
-    -- ^ signed machine integer
-  | I8
-    -- ^ signed 8-bit integer
-  | I16
-    -- ^ signed 16-bit integer
-  | I32
-    -- ^ signed 32-bit integer
-  | I64
-    -- ^ signed 64-bit integer
-  | U
-    -- ^ unsigned machine integer
-  | U8
-    -- ^ unsigned 8-bit integer
-  | U16
-    -- ^ unsigned 16-bit integer
-  | U32
-    -- ^ unsigned 32-bit integer
-  | U64
-    -- ^ unsigned 64-bit integer
-  | F32
-    -- ^ 32-bit floating point
-  | F64
-    -- ^ 64-bit floating point
-  | Decimal
-    -- ^ Increased-precision floating point
-  | BigSInt32
-    -- ^ 32-bit big integer
-  | BigSInt64
-    -- ^ 64-bit big integer
-  | Tuple2 Ty Ty
-    -- ^ 2-tuple
-  | Tuple3 Ty Ty Ty
-    -- ^ 3-tuple
-  | Optional Ty
-    -- ^ Maybe type
-  | Result Ty Ty
-    -- ^ Either type
-    --
-    --   /Note/: The error type in Swift must
-    --   implement the @Error@ protocol. This library
-    --   currently does not enforce this.
-  | Set Ty
-    -- ^ Set type
-  | Dictionary Ty Ty
-    -- ^ Dictionary type
-  | Array Ty
-    -- ^ array type
-  | App Ty Ty
-    -- ^ function type
-  | Poly String
-    -- ^ polymorphic type variable
-  | Concrete
-      { concreteName :: String
-        -- ^ the name of the type
-      , concreteTyVars :: [Ty]
-        -- ^ the type's type variables
-      }
-    -- ^ a concrete type variable, and its
-    --   type variables. Will typically be generated
-    --   by 'getShwifty'.
-  | Tag
-      { tagName :: String
-        -- ^ the name of the type
-      , tagParent :: String
-        -- ^ the type constructor of the type
-        --   to which this alias belongs
-      , tagTyp :: Ty
-        -- ^ the type that this represents
-      , tagDisambiguate :: Bool
-        -- ^ does the type need disambiguation?
-        --
-        --   This will happen if there are multiple
-        --   tags with the same type. This is needed
-        --   to maintain safety.
-      }
-    -- ^ A @Tagged@ typealias, for newtyping
-    --   in a way that doesn't break Codable.
-    --
-    --   See 'getShwiftyWithTags' for examples.
-  deriving stock (Eq, Show, Read)
-  deriving stock (Generic)
-  deriving stock (Lift)
-
--- | A Swift datatype, either a struct (product type)
---   or enum (sum type). Haskll types are
---   sums-of-products, so the way we differentiate
---   when doing codegen,
---   is that types with a single constructor
---   will be converted to a struct, and those with
---   two or more constructors will be converted to an
---   enum. Types with 0 constructors will be converted
---   to an empty enum.
-data SwiftData
-  = SwiftStruct
-      { structName :: String
-        -- ^ The name of the struct
-      , structTyVars :: [String]
-        -- ^ The struct's type variables
-      , structProtocols :: [Protocol]
-        -- ^ The protocols which the struct
-        --   implements
-      , structFields :: [(String, Ty)]
-        -- ^ The fields of the struct. the pair
-        --   is interpreted as (name, type).
-      , structTags :: [Ty]
-        -- ^ The tags of the struct. See 'Tag'.
-      }
-    -- ^ A struct (product type)
-  | SwiftEnum
-      { enumName :: String
-        -- ^ The name of the enum
-      , enumTyVars :: [String]
-        -- ^ The enum's type variables
-      , enumProtocols :: [Protocol]
-        -- ^ The protocols which the enum
-        --   implements
-      , enumCases :: [(String, [(Maybe String, Ty)])]
-        -- ^ The cases of the enum. the type
-        --   can be interpreted as
-        --   (name, [(label, type)]).
-      , enumRawValue :: Maybe Ty
-        -- ^ The rawValue of an enum. See
-        --   https://developer.apple.com/documentation/swift/rawrepresentable/1540698-rawvalue
-        --
-        --   Typically the 'Ty' will be
-        --   'I' or 'String'.
-        --
-        --   /Note/: Currently, nothing will prevent
-        --   you from putting something
-        --   nonsensical here.
-      , enumTags :: [Ty]
-        -- ^ The tags of the struct. See 'Tag'.
-      }
-    -- ^ An enum (sum type)
-  | SwiftAlias
-      { aliasName :: String
-        -- ^ the name of the type alias
-      , aliasTyVars :: [String]
-        -- ^ the type variables of the type alias
-      , aliasTyp :: Ty
-        -- ^ the type this represents (RHS)
-      }
-    -- ^ A /top-level/ type alias
-  deriving stock (Eq, Read, Show, Generic)
-
--- | The class for things which can be converted to
---   'SwiftData'.
---
---   Typically the instance will be generated by
---   'getShwifty'.
-class ToSwiftData a where
-  -- | Convert a type to 'SwiftData'
-  toSwiftData :: Proxy a -> SwiftData
-  -- | Pretty-print a type as its 'SwiftData'.
-  prettySwiftData :: Proxy a -> String
-  default prettySwiftData :: Proxy a -> String
-  prettySwiftData = prettySwiftDataWith (indent defaultOptions) . toSwiftData
-
--- | Swift protocols.
---   Only a few are supported right now.
-data Protocol
-  = Hashable
-    -- ^ The 'Hashable' protocol.
-    --   See https://developer.apple.com/documentation/swift/hashable
-  | Codable
-    -- ^ The 'Codable' protocol.
-    --   See https://developer.apple.com/documentation/swift/hashable
-  | Equatable
-    -- ^ The 'Equatable' protocol.
-    --   See https://developer.apple.com/documentation/swift/hashable
-  deriving stock (Eq, Read, Show, Generic)
-  deriving stock (Lift)
-
--- | Options that specify how to
---   encode your 'SwiftData' to a swift type.
---
---   Options can be set using record syntax on
---   'defaultOptions' with the fields below.
-data Options = Options
-  { typeConstructorModifier :: String -> String
-    -- ^ Function applied to type constructor names.
-    --   The default ('id') makes no changes.
-  , fieldLabelModifier :: String -> String
-    -- ^ Function applied to field labels.
-    --   Handy for removing common record prefixes,
-    --   for example. The default ('id') makes no
-    --   changes.
-  , constructorModifier :: String -> String
-    -- ^ Function applied to value constructor names.
-    --   The default ('id') makes no changes.
-  , optionalExpand :: Bool
-    -- ^ Whether or not to truncate Optional types.
-    --   Normally, an Optional ('Maybe') is encoded
-    --   as "A?", which is syntactic sugar for
-    --   "Optional\<A\>". The default value ('False')
-    --   will keep it as sugar. A value of 'True'
-    --   will expand it to be desugared.
-  , indent :: Int
-    -- ^ Number of spaces to indent field names
-    --   and cases. The default is 4.
-  , generateToSwift :: Bool
-    -- ^ Whether or not to generate a 'ToSwift'
-    --   instance. Sometime this can be desirable
-    --   if you want to define the instance by hand,
-    --   or the instance exists elsewhere.
-    --   The default is 'True', i.e., to generate
-    --   the instance.
-  , generateToSwiftData :: Bool
-    -- ^ Whether or not to generate a 'ToSwiftData'
-    --   instance. Sometime this can be desirable
-    --   if you want to define the instance by hand,
-    --   or the instance exists elsewhere.
-    --   The default is 'True', i.e., to generate
-    --   the instance.
-  , dataProtocols :: [Protocol]
-    -- ^ Protocols to add to a type.
-    --   The default (@[]@) will add none.
-  , dataRawValue :: Maybe Ty
-    -- ^ The rawValue of an enum. See
-    --   https://developer.apple.com/documentation/swift/rawrepresentable/1540698-rawvalue
-    --
-    --   The default ('Nothing') will not
-    --   include any rawValue.
-    --
-    --   Typically, if the type does have
-    --   a 'rawValue', the 'Ty' will be
-    --   'I' or 'Str'.
-    --
-    --   /Note/: Currently, nothing will prevent
-    --   you from putting something
-    --   nonsensical here.
-  , typeAlias :: Bool
-    -- ^ Whether or not to generate a newtype as
-    --   a type alias. Consider if you want this
-    --   or to use 'getShwiftyWithTags' instead.
-    --
-    --   The default ('False') will generate newtypes
-    --   as their own structs.
-  , newtypeTag :: Bool
-    -- ^ Whether or not to generate a newtype as an
-    --   empty enum with a tag. This is for type
-    --   safety reasons, but with retaining the
-    --   ability to have Codable conformance.
-    --
-    --   The default ('False') will not do this.
-    --
-    --   /Note/: This takes priority over 'typeAlias'.
-    --
-    --   /Note/: This option is not currently
-    --   supported for newtype instances.
-    --
-    -- === __Examples__
-    --
-    -- > newtype NonEmptyText = MkNonEmptyText String
-    -- > $(getShwiftyWith (defaultOptions { newtypeTag = True }) ''NonEmpyText)
-    --
-    -- @
-    -- enum NonEmptyTextTag {
-    --     typealias NonEmptyText = Tagged\<NonEmptyTextTag, String\>
-    -- }
-    -- @
-  , lowerFirstField :: Bool
-    -- ^ Whether or not to lower-case the first
-    --   character of a field after applying all
-    --   modifiers to it.
-    --
-    --   The default ('True') will do so.
-  , lowerFirstCase :: Bool
-    -- ^ Whether or not to lower-case the first
-    --   character of a case after applying all
-    --   modifiers to it.
-    --
-    --   The default ('True') will do so.
-  , omitFields :: [String]
-    -- ^ Fields to omit from a struct when
-    --   generating types.
-    --
-    --   The default (@[]@) will omit nothing.
-  , omitCases :: [String]
-    -- ^ Cases to omit from an enum when
-    --   generating types.
-    --
-    --   The default (@[]@) will omit nothing.
-  }
+import Shwifty.Class
+import Shwifty.Codec
+import Shwifty.Pretty
+import Shwifty.Types
 
 -- | The default 'Options'.
 --
@@ -457,7 +137,6 @@ data Options = Options
 --   , fieldLabelModifier = id
 --   , constructorModifier = id
 --   , optionalExpand= False
---   , indent = 4
 --   , generateToSwift = True
 --   , generateToSwiftData = True
 --   , dataProtocols = []
@@ -477,7 +156,6 @@ defaultOptions = Options
   , fieldLabelModifier = id
   , constructorModifier = id
   , optionalExpand = False
-  , indent = 4
   , generateToSwift = True
   , generateToSwiftData = True
   , dataProtocols = []
@@ -489,15 +167,6 @@ defaultOptions = Options
   , omitFields = []
   , omitCases = []
   }
-
--- | The class for things which can be converted to
---   a Swift type ('Ty').
---
---   Typically the instance will be generated by
---   'getShwifty'.
-class ToSwift a where
-  -- | Convert a type to its Swift 'Ty'.
-  toSwift :: Proxy a -> Ty
 
 -- Used internally to reflect polymorphic type
 -- variables into TH, then reify them into 'Poly'.
@@ -518,262 +187,6 @@ instance KnownSymbol x => ToSwift (SingSymbol x) where
 --   `-XQuantifiedConstraints`, or existential types,
 --   but we leave that to the user to handle.
 type X = Void
-
-instance ToSwift Void where
-  toSwift = const (Concrete "Void" [])
-
-instance ToSwift () where
-  toSwift = const Unit
-
-instance ToSwift Bool where
-  toSwift = const Bool
-
-instance ToSwift UUID where
-  toSwift = const (Concrete "UUID" [])
-
-instance ToSwift UTCTime where
-  toSwift = const (Concrete "Date" [])
-
-instance forall a b. (ToSwift a, ToSwift b) => ToSwift (a -> b) where
-  toSwift = const (App (toSwift (Proxy @a)) (toSwift (Proxy @b)))
-
-instance forall a. ToSwift a => ToSwift (Maybe a) where
-  toSwift = const (Optional (toSwift (Proxy @a)))
-
--- | /Note/: In Swift, the ordering of the type
---   variables is flipped - Shwifty has made the
---   design choice to flip them for you. If you
---   take issue with this, please open an issue
---   for discussion on GitHub.
-instance forall a b. (ToSwift a, ToSwift b) => ToSwift (Either a b) where
-  toSwift = const (Result (toSwift (Proxy @b)) (toSwift (Proxy @a)))
-
-instance ToSwift Integer where
-  toSwift = const
-#if WORD_SIZE_IN_BITS == 32
-    BigSInt32
-#else
-    BigSInt64
-#endif
-
-instance ToSwift Int   where toSwift = const I
-instance ToSwift Int8  where toSwift = const I8
-instance ToSwift Int16 where toSwift = const I16
-instance ToSwift Int32 where toSwift = const I32
-instance ToSwift Int64 where toSwift = const I64
-
-instance ToSwift Word   where toSwift = const U
-instance ToSwift Word8  where toSwift = const U8
-instance ToSwift Word16 where toSwift = const U16
-instance ToSwift Word32 where toSwift = const U32
-instance ToSwift Word64 where toSwift = const U64
-
-instance ToSwift Float  where toSwift = const F32
-instance ToSwift Double where toSwift = const F64
-
-instance ToSwift Char where toSwift = const Character
-
-instance forall a. (ToSwift a) => ToSwift (Prim.Array a) where
-  toSwift = const (Array (toSwift (Proxy @a)))
-
-instance forall a. (ToSwift a) => ToSwift (Prim.SmallArray a) where
-  toSwift = const (Array (toSwift (Proxy @a)))
-
-instance ToSwift Prim.ByteArray where
-  toSwift = const (Array U8)
-
-instance forall a. (ToSwift a) => ToSwift (Prim.PrimArray a) where
-  toSwift = const (Array (toSwift (Proxy @a)))
-
-instance forall a. ToSwift a => ToSwift (Vector a) where
-  toSwift = const (Array (toSwift (Proxy @a)))
-
-instance {-# overlappable #-} forall a. ToSwift a => ToSwift [a] where
-  toSwift = const (Array (toSwift (Proxy @a)))
-
-instance {-# overlapping #-} ToSwift [Char] where toSwift = const Str
-
-instance ToSwift TL.Text where toSwift = const Str
-instance ToSwift TS.Text where toSwift = const Str
-
-instance ToSwift BL.ByteString where toSwift = const (Array U8)
-instance ToSwift BS.ByteString where toSwift = const (Array U8)
-
-instance ToSwift (CI s) where toSwift = const Str
-
-instance forall k v. (ToSwift k, ToSwift v) => ToSwift (M.Map k v) where toSwift = const (Dictionary (toSwift (Proxy @k)) (toSwift (Proxy @v)))
-
-instance forall k v. (ToSwift k, ToSwift v) => ToSwift (HM.HashMap k v) where toSwift = const (Dictionary (toSwift (Proxy @k)) (toSwift (Proxy @v)))
-
-instance forall a b. (ToSwift a, ToSwift b) => ToSwift ((,) a b) where
-  toSwift = const (Tuple2 (toSwift (Proxy @a)) (toSwift (Proxy @b)))
-
-instance forall a b c. (ToSwift a, ToSwift b, ToSwift c) => ToSwift ((,,) a b c) where
-  toSwift = const (Tuple3 (toSwift (Proxy @a)) (toSwift (Proxy @b)) (toSwift (Proxy @c)))
-
-labelCase :: Maybe String -> Ty -> String
-labelCase Nothing ty = prettyTy ty
-labelCase (Just label) ty = "_ " ++ label ++ ": " ++ prettyTy ty
-
-prettyTypeHeader :: String -> [String] -> String
-prettyTypeHeader name [] = name
-prettyTypeHeader name tyVars = name ++ "<" ++ intercalate ", " tyVars ++ ">"
-
--- | Pretty-print a 'Ty'.
-prettyTy :: Ty -> String
-prettyTy = \case
-  Str -> "String"
-  Unit -> "()"
-  Bool -> "Bool"
-  Character -> "Character"
-  Tuple2 e1 e2 -> "(" ++ prettyTy e1 ++ ", " ++ prettyTy e2 ++ ")"
-  Tuple3 e1 e2 e3 -> "(" ++ prettyTy e1 ++ ", " ++ prettyTy e2 ++ ", " ++ prettyTy e3 ++ ")"
-  Optional e -> prettyTy e ++ "?"
-  Result e1 e2 -> "Result<" ++ prettyTy e1 ++ ", " ++ prettyTy e2 ++ ">"
-  Set e -> "Set<" ++ prettyTy e ++ ">"
-  Dictionary e1 e2 -> "Dictionary<" ++ prettyTy e1 ++ ", " ++ prettyTy e2 ++ ">"
-  Array e -> "[" ++ prettyTy e ++ "]"
-  -- App is special, we recurse until we no longer
-  -- any applications.
-  App e1 e2 -> prettyApp e1 e2
-  I -> "Int"
-  I8 -> "Int8"
-  I16 -> "Int16"
-  I32 -> "Int32"
-  I64 -> "Int64"
-  U -> "UInt"
-  U8 -> "UInt8"
-  U16 -> "UInt16"
-  U32 -> "UInt32"
-  U64 -> "UInt64"
-  F32 -> "Float"
-  F64 -> "Double"
-  Decimal -> "Decimal"
-  BigSInt32 -> "BigSInt32"
-  BigSInt64 -> "BigSInt64"
-  Poly ty -> ty
-  Concrete ty [] -> ty
-  Concrete ty tys -> ty
-    ++ "<"
-    ++ intercalate ", " (map prettyTy tys)
-    ++ ">"
-  Tag {..} -> tagParent ++ "." ++ tagName
-
-prettyApp :: Ty -> Ty -> String
-prettyApp t1 t2 = "(("
-  ++ intercalate ", " (map prettyTy as)
-  ++ ") -> "
-  ++ prettyTy r
-  ++ ")"
-  where
-    (as, r) = go t1 t2
-    go e1 (App e2 e3) = case go e2 e3 of
-      (args, ret) -> (e1 : args, ret)
-    go e1 e2 = ([e1], e2)
-
-prettyRawValueAndProtocols :: Maybe Ty -> [Protocol] -> String
-prettyRawValueAndProtocols Nothing ps = prettyProtocols ps
-prettyRawValueAndProtocols (Just ty) [] = ": " ++ prettyTy ty
-prettyRawValueAndProtocols (Just ty) ps = ": " ++ prettyTy ty ++ ", " ++ intercalate ", " (map show ps)
-
-prettyProtocols :: [Protocol] -> String
-prettyProtocols = \case
-  [] -> ""
-  ps -> ": " ++ intercalate ", " (map show ps)
-
-prettyTags :: String -> [Ty] -> String
-prettyTags indents = go where
-  go [] = ""
-  go (Tag{..}:ts) = []
-    ++ "\n"
-    ++ prettyTagDisambiguator tagDisambiguate indents tagName
-    ++ indents
-    ++ "typealias "
-    ++ tagName
-    ++ " = Tagged<"
-    ++ (if tagDisambiguate then tagName ++ "Tag" else tagParent)
-    ++ ", "
-    ++ prettyTy tagTyp
-    ++ ">"
-    ++ go ts
-  go _ = error "non-tag supplied to prettyTags"
-
-prettyTagDisambiguator :: ()
-  => Bool
-     -- ^ disambiguate?
-  -> String
-     -- ^ indents
-  -> String
-     -- ^ parent type name
-  -> String
-prettyTagDisambiguator disambiguate indents parent
-  = if disambiguate
-      then []
-        ++ indents
-        ++ "enum "
-        ++ parent
-        ++ "Tag { }\n"
-      else ""
-
--- | Pretty-print a 'SwiftData'.
---   This function cares about indent.
-prettySwiftDataWith :: ()
-  => Int -- ^ indent
-  -> SwiftData
-  -> String
-prettySwiftDataWith indent = \case
-
-  SwiftEnum {..} -> []
-    ++ "enum "
-    ++ prettyTypeHeader enumName enumTyVars
-    ++ prettyRawValueAndProtocols enumRawValue enumProtocols
-    ++ " {"
-    ++ newlineNonEmpty enumCases
-    ++ go enumCases
-    ++ prettyTags indents enumTags
-    ++ newlineNonEmpty enumTags
-    ++ "}"
-    where
-      go [] = ""
-      go ((caseNm, []):xs) = []
-        ++ indents
-        ++ "case "
-        ++ caseNm
-        ++ "\n"
-        ++ go xs
-      go ((caseNm, cs):xs) = []
-        ++ indents
-        ++ "case "
-        ++ caseNm
-        ++ "("
-        ++ (intercalate ", " (map (uncurry labelCase) cs))
-        ++ ")\n"
-        ++ go xs
-
-  SwiftStruct {..} -> []
-    ++ "struct "
-    ++ prettyTypeHeader structName structTyVars
-    ++ prettyProtocols structProtocols
-    ++ " {"
-    ++ newlineNonEmpty structFields
-    ++ go structFields
-    ++ prettyTags indents structTags
-    ++ newlineNonEmpty structTags
-    ++ "}"
-    where
-      go [] = ""
-      go ((fieldName,ty):fs) = indents ++ "let " ++ fieldName ++ ": " ++ prettyTy ty ++ "\n" ++ go fs
-
-  SwiftAlias{..} -> []
-    ++ "typealias "
-    ++ prettyTypeHeader aliasName aliasTyVars
-    ++ " = "
-    ++ prettyTy aliasTyp
-  where
-    indents = replicate indent ' '
-
-    newlineNonEmpty [] = ""
-    newlineNonEmpty _ = "\n"
 
 ensureEnabled :: Extension -> ShwiftyM ()
 ensureEnabled ext = do
@@ -1086,15 +499,11 @@ getToSwiftData o@Options{..} parentName instTys tyVarBndrs variant tags cons = i
   then do
     instHead <- buildTypeInstance parentName ClassSwiftData instTys tyVarBndrs variant
     clauseData <- consToSwift o parentName instTys variant tags cons
-    clausePretty <- mkClausePretty o
     inst <- lift $ instanceD
       (pure [])
       (pure instHead)
         [ funD 'toSwiftData
           [ clause [] (normalB (pure clauseData)) []
-          ]
-        , funD 'prettySwiftData
-          [ clause [] (normalB (pure clausePretty)) []
           ]
         ]
     pure [inst]
@@ -1377,27 +786,6 @@ tyE = \case
   App e1 e2 -> AppE (AppE (ConE 'App) (tyE e1)) (tyE e2)
   Array e -> AppE (ConE 'Array) (tyE e)
   Tag{..} -> AppE (AppE (AppE (AppE (ConE 'Tag) (stringE tagName)) (stringE tagParent)) (tyE tagTyp)) (if tagDisambiguate then ConE 'True else ConE 'False)
-
-mkClausePretty :: ()
-  => Options
-  -> ShwiftyM Exp
-mkClausePretty Options{..} = do
-  value <- lift $ newName "value"
-  ourMatch <- matchProxy
-    (AppE
-      (AppE
-        (VarE 'prettySwiftDataWith)
-        (LitE (IntegerL (fromIntegral indent)))
-      )
-      (ParensE
-        (AppE
-          (VarE 'toSwiftData)
-          (VarE value)
-        )
-      )
-    )
-  let matches = [pure ourMatch]
-  lift $ lamE [varP value] (caseE (varE value) matches)
 
 consToSwift :: ()
   => Options
@@ -2121,148 +1509,6 @@ getShwiftyCodec c = getShwiftyCodecTags c []
 --   instead of 'Options'.
 getShwiftyCodecTags :: forall tag. ModifyOptions tag => Codec tag -> [Name] -> Name -> Q [Dec]
 getShwiftyCodecTags _ ts n = getShwiftyWithTags (modifyOptions @tag defaultOptions) ts n
-
--- | Modify options.
-class ModifyOptions tag where
-  modifyOptions :: Options -> Options
-
--- | No modifications
-type AsIs = ()
-
-instance ModifyOptions AsIs where
-  modifyOptions = id
-
--- | A carrier for modifiers.
-data Codec tag = Codec
-
-instance ModifyOptions tag => ModifyOptions (Codec tag) where
-  modifyOptions = modifyOptions @tag
-
-infixr 6 &
--- | Combine modifications.
-data a & b
-
-instance forall a b. (ModifyOptions a, ModifyOptions b) => ModifyOptions (a & b) where
-  modifyOptions = modifyOptions @a . modifyOptions @b
-
--- | Label modifiers.
-data Label
-  = TyCon
-    -- ^ Type constructor modifier
-  | DataCon
-    -- ^ Data constructor modifiers
-  | Field
-    -- ^ Field label modifiers
-
--- | Modify a label by dropping a string
-data Drop (label :: Label) (string :: Symbol)
-
-instance KnownSymbol string => ModifyOptions (Drop 'TyCon string) where
-  modifyOptions options = options
-    { typeConstructorModifier = drop (length (symbolVal (Proxy @string)))
-    }
-
-instance KnownSymbol string => ModifyOptions (Drop 'DataCon string) where
-  modifyOptions options = options
-    { constructorModifier = drop (length (symbolVal (Proxy @string)))
-    }
-
-instance KnownSymbol string => ModifyOptions (Drop 'Field string) where
-  modifyOptions options = options
-    { fieldLabelModifier = drop (length (symbolVal (Proxy @string)))
-    }
-
--- | Modify the indent
-data Indent (indent :: Nat)
-
-instance KnownNat indent => ModifyOptions (Indent indent) where
-  modifyOptions options = options
-    { indent = fromIntegral (natVal (Proxy @indent))
-    }
-
--- | Don't generate a specific class.
-data DontGenerate (cls :: * -> Constraint)
-
-class GenerateClass (c :: * -> Constraint) where
-  classModifier :: Options -> Options
-
-instance GenerateClass ToSwiftData where
-  classModifier options = options { generateToSwiftData = False }
-
-instance GenerateClass ToSwift where
-  classModifier options = options { generateToSwift = False }
-
-instance GenerateClass c => ModifyOptions (DontGenerate c) where
-  modifyOptions = classModifier @c
-
--- | Add protocols
-data Implement (protocol :: Protocol)
-
-instance ModifyOptions (Implement 'Equatable) where
-  modifyOptions options = options { dataProtocols = Equatable : dataProtocols options }
-
-instance ModifyOptions (Implement 'Hashable) where
-  modifyOptions options = options { dataProtocols = Hashable : dataProtocols options }
-
-instance ModifyOptions (Implement 'Codable) where
-  modifyOptions options = options { dataProtocols = Codable : dataProtocols options }
-
--- | Add a rawValue
-data RawValue (ty :: Ty)
-
-class CanBeRawValue (ty :: Ty) where
-  getRawValue :: Ty
-
-instance CanBeRawValue 'Str where getRawValue = Str
-instance CanBeRawValue 'I where getRawValue = I
-instance CanBeRawValue 'I8 where getRawValue = I8
-instance CanBeRawValue 'I16 where getRawValue = I16
-instance CanBeRawValue 'I32 where getRawValue = I32
-instance CanBeRawValue 'I64 where getRawValue = I64
-instance CanBeRawValue 'U where getRawValue = U
-instance CanBeRawValue 'U8 where getRawValue = U8
-instance CanBeRawValue 'U16 where getRawValue = U16
-instance CanBeRawValue 'U32 where getRawValue = U32
-instance CanBeRawValue 'U64 where getRawValue = U64
-
-instance CanBeRawValue ty => ModifyOptions (RawValue ty) where
-  modifyOptions options = options { dataRawValue = Just (getRawValue @ty) }
-
--- | Make it a type alias (only applies to newtypes)
-data TypeAlias
-
-instance ModifyOptions TypeAlias where
-  modifyOptions options = options { typeAlias = True }
-
--- | Make it a newtype tag (only applies to newtype tags)
-data NewtypeTag
-
-instance ModifyOptions NewtypeTag where
-  modifyOptions options = options { newtypeTag = True }
-
--- | Dont lower-case fields/cases
-data DontLowercase (someKind :: Label)
-
-instance TypeError ('Text "Cannot apply DontLowercase to TyCon") => ModifyOptions (DontLowercase 'TyCon) where
-  modifyOptions _ = error "UNREACHABLE"
-
-instance ModifyOptions (DontLowercase 'DataCon) where
-  modifyOptions options = options { lowerFirstCase = False }
-
-instance ModifyOptions (DontLowercase 'Field) where
-  modifyOptions options = options { lowerFirstField = False }
-
--- | Omit a field
-data OmitField (field :: Symbol)
-
-instance KnownSymbol field => ModifyOptions (OmitField field) where
-  modifyOptions options = options { omitFields = symbolVal (Proxy @field) : omitFields options }
-
--- | Omit a case
-data OmitCase (cas :: Symbol)
-
-instance KnownSymbol cas => ModifyOptions (OmitCase cas) where
-  modifyOptions options = options { omitCases = symbolVal (Proxy @cas) : omitCases options }
 
 -- | Construct a Type Alias.
 aliasExp :: ()
