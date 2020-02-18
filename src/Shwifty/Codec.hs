@@ -3,9 +3,12 @@
   , DataKinds
   , ExplicitNamespaces
   , FlexibleInstances
+  , GADTs
   , KindSignatures
+  , PolyKinds
   , ScopedTypeVariables
   , TypeApplications
+  , TypeFamilies
   , TypeOperators
   , TypeSynonymInstances
   , UndecidableInstances
@@ -108,6 +111,11 @@ instance GenerateClass c => ModifyOptions (DontGenerate c) where
 -- | Add protocols
 data Implement (protocol :: Protocol)
 
+class KnownProtocol (p :: Protocol) where protocolVal :: Protocol
+instance KnownProtocol 'Equatable where protocolVal = Equatable
+instance KnownProtocol 'Hashable where protocolVal = Hashable
+instance KnownProtocol 'Codable where protocolVal = Codable
+
 instance ModifyOptions (Implement 'Equatable) where
   modifyOptions options = options { dataProtocols = Equatable : dataProtocols options }
 
@@ -175,7 +183,25 @@ instance KnownSymbol cas => ModifyOptions (OmitCase cas) where
   modifyOptions options = options { omitCases = symbolVal (Proxy @cas) : omitCases options }
 
 -- | Make a base type
-data MakeBase
+data MakeBase (protocols :: [Protocol])
 
-instance ModifyOptions MakeBase where
-  modifyOptions options = options { makeBase = True }
+type family Protocols (protocols :: [Protocol]) :: * where
+  Protocols '[] = ()
+  Protocols (p ': ps) = Implement p & Protocols ps
+
+instance forall protocols. ProtocolList protocols => ModifyOptions (MakeBase protocols) where
+  modifyOptions options = options
+    { makeBase = (,) True (protocolList @protocols)
+    }
+
+data SomeProtocol where
+  SomeProtocol :: KnownProtocol p => SomeProtocol
+
+class ProtocolList (x :: [Protocol]) where
+  protocolList :: [Protocol]
+
+instance ProtocolList '[] where
+  protocolList = []
+
+instance forall p ps. (KnownProtocol p, ProtocolList ps) => ProtocolList (p ': ps) where
+  protocolList = protocolVal @p : protocolList @ps

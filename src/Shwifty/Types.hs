@@ -300,7 +300,7 @@ data Options = Options
     --   generating types.
     --
     --   The default (@[]@) will omit nothing.
-  , makeBase :: Bool
+  , makeBase :: (Bool, [Protocol])
     -- ^ Whether or not to make a base version
     --   type. Here, "base version" refers to a
     --   version of the type without any fields.
