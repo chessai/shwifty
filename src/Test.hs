@@ -206,7 +206,7 @@ test = do
   --testPrint @(AliasTestArb X)
 
 testPrint :: forall a. ToSwiftData a => IO ()
-testPrint = putStrLn $ prettySwiftData $ Proxy @a
+testPrint = putStrLn $ prettySwiftData $ toSwiftData (Proxy @a)
 
 --data VoidTest
 --getShwifty ''VoidTest
