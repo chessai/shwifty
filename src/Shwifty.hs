@@ -1628,10 +1628,16 @@ stripFields = \case
       stripOne (x, _) = (x, [])
   s -> s
 
+suffixBase :: SwiftData -> SwiftData
+suffixBase = \case
+  s@SwiftStruct{} -> s { structName = structName s ++ "Base" }
+  s@SwiftEnum{} -> s { enumName = enumName s ++ "Base" }
+  s -> s
+
 giveBase :: SwiftData -> SwiftData
 giveBase = \case
-  s@SwiftStruct{} -> s { structPrivateTypes = [stripFields s] }
-  s@SwiftEnum{} -> s { enumPrivateTypes = [stripFields s] }
+  s@SwiftStruct{} -> s { structPrivateTypes = [suffixBase (stripFields s)] }
+  s@SwiftEnum{} -> s { enumPrivateTypes = [suffixBase (stripFields s)] }
   s -> s
 
 -- | Apply 'giveBase' to a 'SwiftData'.
@@ -1639,6 +1645,9 @@ giveBase = \case
 --   Ideally we would offload this into
 --   the first construction of the SwiftData,
 --   inside structExp/enumExp.
+--
+--
+-- should we strip tyvars as well?
 applyBase :: Bool -> Exp -> Exp
 applyBase b = if b
   then AppE (VarE 'giveBase) . ParensE
