@@ -2,7 +2,7 @@ cabal-version: 2.2
 name:
   shwifty
 version:
-  0.0.1.0
+  0.0.2.0
 synopsis:
   Generate swift types from haskell types.
 description:
