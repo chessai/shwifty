@@ -16,7 +16,7 @@
 * Fix pretty-printing for functions in swift
 * Remove instance for Void
 * Make 'prettySwiftData' a top-level function
-* Remove 'Equatable' 'Protocol'
+* Remove 'Comparable' protocol
 
 ## 0.0.1.0 -- 2020-02-03
 
