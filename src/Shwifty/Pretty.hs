@@ -12,6 +12,7 @@ import Data.List (intercalate)
 
 import Shwifty.Types
 
+-- | Pretty-print a 'SwiftData'.
 prettySwiftData :: SwiftData -> String
 prettySwiftData = prettySwiftDataWith 4
 

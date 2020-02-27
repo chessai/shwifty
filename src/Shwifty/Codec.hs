@@ -21,7 +21,6 @@ module Shwifty.Codec
   , type (&)
   , Label(..)
   , Drop
-  , GenerateClass
   , DontGenerate
   , Implement
   , RawValue
@@ -128,6 +127,9 @@ instance ModifyOptions (Implement 'Codable) where
 -- | Add a rawValue
 data RawValue (ty :: Ty)
 
+-- | A Class that indicates that this swift type
+--   can be a rawValue. The value of 'getRawValue'
+--   will be its actual rawValue.
 class CanBeRawValue (ty :: Ty) where
   getRawValue :: Ty
 

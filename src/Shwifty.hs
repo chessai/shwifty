@@ -88,7 +88,6 @@ module Shwifty
   , type (&)
   , Label(..)
   , Drop
-  , GenerateClass
   , DontGenerate
   , Implement
   , RawValue
