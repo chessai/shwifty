@@ -1525,6 +1525,12 @@ getShwiftyCodec c = getShwiftyCodecTags c []
 getShwiftyCodecTags :: forall tag. ModifyOptions tag => Codec tag -> [Name] -> Name -> Q [Dec]
 getShwiftyCodecTags _ ts n = getShwiftyWithTags (modifyOptions @tag defaultOptions) ts n
 
+--getShwiftyModTags :: forall tag typ. (ModifyOptions tag, KnownSymbol typ) => [Name] -> Q [Dec]
+--getShwiftyModTags ts = getShwiftyWithTags (modifyOptions @tag defaultOptions) ts (mkName (symbolVal (Proxy @typ)))
+
+--combine :: Codec a -> Codec b -> Codec (a & b)
+--combine _ _ = Codec
+
 -- | Construct a Type Alias.
 aliasExp :: ()
   => Name
