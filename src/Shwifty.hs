@@ -279,7 +279,7 @@ ensureEnabled ext = do
 -- > getShwifty ''Fun
 --
 -- @
--- struct Fun<A> {
+-- struct Fun\<A\> {
 --     let fun: ((Int, Char, Bool, String) -> A?)
 -- }
 -- @
