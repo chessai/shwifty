@@ -20,6 +20,7 @@
   , TypeOperators
   , UndecidableInstances
   , ViewPatterns
+  , CPP
 #-}
 
 {-# options_ghc
@@ -115,7 +116,7 @@ import Data.Maybe (mapMaybe, catMaybes)
 import Data.Proxy (Proxy(..))
 import Data.Void (Void)
 import GHC.TypeLits (Symbol, KnownSymbol, symbolVal)
-import Language.Haskell.TH hiding (stringE)
+import Language.Haskell.TH hiding (stringE, tupE)
 import Language.Haskell.TH.Datatype
 import Prelude hiding (Enum(..))
 import qualified Data.Char as Char
@@ -858,7 +859,7 @@ liftCons x = ((:[]) . pure) <$> x
 
 -- Create the case (String, [(Maybe String, Ty)])
 mkCaseHelper :: Options -> Name -> [Exp] -> Exp
-mkCaseHelper o name es = TupE [ caseName o name, ListE es ]
+mkCaseHelper o name es = tupE [ caseName o name, ListE es ]
 
 mkCase :: ()
   => Options
@@ -872,7 +873,7 @@ mkCase o = \case
     , constructorFields = fields
     , ..
     } -> Right $ mkCaseHelper o name $ fields <&>
-        (\typ -> TupE
+        (\typ -> tupE
           [ ConE 'Nothing
           , toSwiftEPoly typ
           ]
@@ -894,7 +895,7 @@ mkCase o = \case
        in Right $ mkCaseHelper o name cases
 
 caseField :: Options -> Name -> Type -> Exp
-caseField o n typ = TupE
+caseField o n typ = tupE
   [ mkLabel o n
   , toSwiftEPoly typ
   ]
@@ -1127,7 +1128,7 @@ getFreeTyVar = \case
 
 -- make a struct field pretty
 prettyField :: Options -> Name -> Type -> Exp
-prettyField Options{..} name ty = TupE
+prettyField Options{..} name ty = tupE
   [ (stringE (onHeadWith lowerFirstField (fieldLabelModifier (nameStr name))))
   , toSwiftEPoly ty
   ]
@@ -1340,6 +1341,16 @@ applyTyCon = foldl' AppT . ConT
 -- Turn a String into an Exp string literal
 stringE :: String -> Exp
 stringE = LitE . StringL
+
+-- Backwards compatible TupE
+tupE :: [Exp] -> Exp
+#if MIN_VERSION_template_haskell(2,16,0)
+tupE = \ case
+  [a] -> a
+  a -> TupE (map Just a)
+#else
+tupE = TupE
+#endif
 
 -- convert a type into a 'Ty'.
 -- we respect constraints here - e.g. in
