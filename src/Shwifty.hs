@@ -1,6 +1,7 @@
 {-# language
     AllowAmbiguousTypes
   , BangPatterns
+  , CPP
   , DataKinds
   , DeriveFoldable
   , DeriveFunctor
@@ -115,7 +116,7 @@ import Data.Maybe (mapMaybe, catMaybes)
 import Data.Proxy (Proxy(..))
 import Data.Void (Void)
 import GHC.TypeLits (Symbol, KnownSymbol, symbolVal)
-import Language.Haskell.TH hiding (stringE)
+import Language.Haskell.TH hiding (stringE, tupE)
 import Language.Haskell.TH.Datatype
 import Prelude hiding (Enum(..))
 import qualified Data.Char as Char
@@ -583,7 +584,7 @@ getShwiftyWithTags :: ()
   -> [Name]
   -> Name
   -> Q [Dec]
-getShwiftyWithTags o@Options{..} ts name = do
+getShwiftyWithTags o ts name = do
   r <- runExceptT $ do
     ensureEnabled ScopedTypeVariables
     ensureEnabled DataKinds
@@ -858,7 +859,7 @@ liftCons x = ((:[]) . pure) <$> x
 
 -- Create the case (String, [(Maybe String, Ty)])
 mkCaseHelper :: Options -> Name -> [Exp] -> Exp
-mkCaseHelper o name es = TupE [ caseName o name, ListE es ]
+mkCaseHelper o name es = tupE [ caseName o name, ListE es ]
 
 mkCase :: ()
   => Options
@@ -870,9 +871,8 @@ mkCase o = \case
     { constructorVariant = NormalConstructor
     , constructorName = name
     , constructorFields = fields
-    , ..
     } -> Right $ mkCaseHelper o name $ fields <&>
-        (\typ -> TupE
+        (\typ -> tupE
           [ ConE 'Nothing
           , toSwiftEPoly typ
           ]
@@ -880,7 +880,6 @@ mkCase o = \case
   ConstructorInfo
     { constructorVariant = InfixConstructor
     , constructorName = name
-    , ..
     } -> Left $ EncounteredInfixConstructor name
   -- records
   -- we turn names into labels
@@ -888,13 +887,12 @@ mkCase o = \case
     { constructorVariant = RecordConstructor fieldNames
     , constructorName = name
     , constructorFields = fields
-    , ..
     } ->
        let cases = zipWith (caseField o) fieldNames fields
        in Right $ mkCaseHelper o name cases
 
 caseField :: Options -> Name -> Type -> Exp
-caseField o n typ = TupE
+caseField o n typ = tupE
   [ mkLabel o n
   , toSwiftEPoly typ
   ]
@@ -929,7 +927,6 @@ mkNewtypeInstanceAlias (stripConT -> instTys) = \case
   ConstructorInfo
     { constructorName = conName
     , constructorFields = [field]
-    , ..
     } -> do
       lift $ match
         (conP 'Proxy [])
@@ -974,7 +971,6 @@ mkTypeTag :: ()
 mkTypeTag Options{..} typName instTys = \case
   ConstructorInfo
     { constructorFields = [field]
-    , ..
     } -> do
       let parentName = mkName
             (nameStr typName ++ "Tag")
@@ -995,7 +991,6 @@ mkTypeAlias :: ()
 mkTypeAlias typName instTys = \case
   ConstructorInfo
     { constructorFields = [field]
-    , ..
     } -> do
       lift $ match
         (conP 'Proxy [])
@@ -1034,7 +1029,6 @@ mkProd o@Options{..} typName instTys ts = \case
   ConstructorInfo
     { constructorVariant = NormalConstructor
     , constructorFields = []
-    , ..
     } -> do
       matchProxy $ structExp typName instTys dataProtocols [] ts makeBase
   -- single constructor, non-record (Normal)
@@ -1127,7 +1121,7 @@ getFreeTyVar = \case
 
 -- make a struct field pretty
 prettyField :: Options -> Name -> Type -> Exp
-prettyField Options{..} name ty = TupE
+prettyField Options{..} name ty = tupE
   [ (stringE (onHeadWith lowerFirstField (fieldLabelModifier (nameStr name))))
   , toSwiftEPoly ty
   ]
@@ -1669,3 +1663,9 @@ applyBase (b, r, ps) (ParensE -> s) = if b
 protosExp :: [Protocol] -> Exp
 protosExp = ListE . map (ConE . mkName . show)
 
+tupE :: [Exp] -> Exp
+#if MIN_VERSION_template_haskell(2,16,0)
+tupE = TupE . map Just
+#else
+tupE = TupE
+#endif
