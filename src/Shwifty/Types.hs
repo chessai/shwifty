@@ -190,6 +190,8 @@ data Protocol
   | Equatable
     -- ^ The 'Equatable' protocol.
     --   See https://developer.apple.com/documentation/swift/hashable
+  | OtherProtocol String
+    -- ^ A user-specified protocol.
   deriving stock (Eq, Read, Show, Generic)
   deriving stock (Lift)
 

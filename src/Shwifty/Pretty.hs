@@ -68,7 +68,14 @@ prettyTypeHeader name tyVars = name ++ "<" ++ intercalate ", " tyVars ++ ">"
 prettyRawValueAndProtocols :: Maybe Ty -> [Protocol] -> String
 prettyRawValueAndProtocols Nothing ps = prettyProtocols ps
 prettyRawValueAndProtocols (Just ty) [] = ": " ++ prettyTy ty
-prettyRawValueAndProtocols (Just ty) ps = ": " ++ prettyTy ty ++ ", " ++ intercalate ", " (map show ps)
+prettyRawValueAndProtocols (Just ty) ps = ": " ++ prettyTy ty ++ ", " ++ intercalate ", " (map prettyProtocol ps)
+
+prettyProtocol :: Protocol -> String
+prettyProtocol = \case
+  Equatable -> "Equatable"
+  Hashable -> "Hashable"
+  Codable -> "Codable"
+  OtherProtocol p -> p
 
 prettyProtocols :: [Protocol] -> String
 prettyProtocols = \case
