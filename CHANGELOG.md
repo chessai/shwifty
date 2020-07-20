@@ -1,5 +1,9 @@
 # Revision history for shwifty
 
+## TBD
+
+* Add 'OtherProtocol' protocol constructor
+
 ## 0.0.2.0 - 2020-02-26
 
 * Primitive lower bound: 0.7 -> 0.6.4
