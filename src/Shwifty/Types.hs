@@ -186,10 +186,10 @@ data Protocol
     --   See https://developer.apple.com/documentation/swift/hashable
   | Codable
     -- ^ The 'Codable' protocol.
-    --   See https://developer.apple.com/documentation/swift/hashable
+    --   See https://developer.apple.com/documentation/swift/codable
   | Equatable
     -- ^ The 'Equatable' protocol.
-    --   See https://developer.apple.com/documentation/swift/hashable
+    --   See https://developer.apple.com/documentation/swift/equatable
   | OtherProtocol String
     -- ^ A user-specified protocol.
   deriving stock (Eq, Read, Show, Generic)
