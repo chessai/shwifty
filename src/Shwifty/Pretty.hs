@@ -159,6 +159,7 @@ prettyTy = \case
     ++ intercalate ", " (map prettyTy tys)
     ++ ">"
   Tag {..} -> tagParent ++ "." ++ tagName
+  Data -> "Data"
 
 prettyApp :: Ty -> Ty -> String
 prettyApp t1 t2 = "(("
