@@ -10,6 +10,7 @@ module Shwifty.Class
   , ToSwiftData(..)
   ) where
 
+import Data.Aeson (Value)
 import Data.List (intercalate)
 import Data.Proxy (Proxy(..))
 import Control.Monad.Except
@@ -21,6 +22,7 @@ import Data.Kind (Constraint)
 import Data.List.NonEmpty ((<|), NonEmpty(..))
 import Data.Maybe (mapMaybe, catMaybes)
 import Data.Proxy (Proxy(..))
+import Data.Scientific (Scientific)
 import Data.Time (UTCTime)
 import Data.UUID.Types (UUID)
 import Data.Vector (Vector)
@@ -152,3 +154,17 @@ instance forall a b. (ToSwift a, ToSwift b) => ToSwift ((,) a b) where
 
 instance forall a b c. (ToSwift a, ToSwift b, ToSwift c) => ToSwift ((,,) a b c) where
   toSwift = const (Tuple3 (toSwift (Proxy @a)) (toSwift (Proxy @b)) (toSwift (Proxy @c)))
+
+instance ToSwiftData Scientific where
+  toSwiftData _ = SwiftAlias
+    { aliasName = "Scientific"
+    , aliasTyVars = []
+    , aliasTyp = F64
+    }
+
+instance ToSwiftData Value where
+  toSwiftData _ = SwiftAlias
+    { aliasName = "Value"
+    , aliasTyVars = []
+    , aliasTyp = Data
+    }

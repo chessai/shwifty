@@ -41,12 +41,14 @@ library
     Shwifty.Pretty
     Shwifty.Types
   build-depends:
+    , aeson >= 1.5 && < 2
     , base >= 4.11 && < 4.15
     , bytestring >= 0.10 && < 0.11
     , case-insensitive >= 1.2 && < 1.3
     , containers >= 0.5.9 && < 0.7
     , mtl >= 2.2 && < 2.3
     , primitive >= 0.6.4 && < 0.8
+    , scientific >= 0.3.6 && < 0.4
     , template-haskell >= 2.11 && < 2.17
     , text >= 1.2 && < 1.3
     , th-abstraction >= 0.3 && < 0.4

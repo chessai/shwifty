@@ -799,6 +799,7 @@ tyE = \case
   App e1 e2 -> AppE (AppE (ConE 'App) (tyE e1)) (tyE e2)
   Array e -> AppE (ConE 'Array) (tyE e)
   Tag{..} -> AppE (AppE (AppE (AppE (ConE 'Tag) (stringE tagName)) (stringE tagParent)) (tyE tagTyp)) (if tagDisambiguate then ConE 'True else ConE 'False)
+  Data -> ConE 'Data
 
 consToSwift :: ()
   => Options
