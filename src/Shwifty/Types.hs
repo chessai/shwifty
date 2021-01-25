@@ -108,6 +108,7 @@ data Ty
     --   See 'getShwiftyWithTags' for examples.
     | Data
       -- ^ byte buffer in memory
+      --   See https://developer.apple.com/documentation/foundation/data
   deriving stock (Eq, Show, Read)
   deriving stock (Generic)
   deriving stock (Lift)
