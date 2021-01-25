@@ -106,6 +106,9 @@ data Ty
     --   in a way that doesn't break Codable.
     --
     --   See 'getShwiftyWithTags' for examples.
+    | Data
+      -- ^ byte buffer in memory
+      --   See https://developer.apple.com/documentation/foundation/data
   deriving stock (Eq, Show, Read)
   deriving stock (Generic)
   deriving stock (Lift)
