@@ -508,7 +508,8 @@ getToSwiftData :: ()
   -> [ConstructorInfo]
      -- ^ constructors
   -> ShwiftyM [Dec]
-getToSwiftData o@Options{..} parentName instTys tyVarBndrs variant tags cons = if generateToSwiftData
+getToSwiftData o@Options{..} parentName instTys tyVarBndrs variant tags cons =
+  if generateToSwiftData
   then do
     instHead <- buildTypeInstance parentName ClassSwiftData instTys tyVarBndrs variant
     clauseData <- consToSwift o parentName instTys variant tags makeBase cons
