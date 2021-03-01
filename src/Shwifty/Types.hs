@@ -10,6 +10,7 @@ module Shwifty.Types
   , SwiftData(..)
   , Protocol(..)
   , Options(..)
+  , KeepOrDiscard(..)
   ) where
 
 import GHC.Generics (Generic)
@@ -295,16 +296,16 @@ data Options = Options
     --   modifiers to it.
     --
     --   The default ('True') will do so.
-  , omitFields :: [String]
+  , omitFields :: String -> KeepOrDiscard
     -- ^ Fields to omit from a struct when
     --   generating types.
     --
-    --   The default (@[]@) will omit nothing.
-  , omitCases :: [String]
+    --   The default (@'const' 'Keep'@) will omit nothing.
+  , omitCases :: String -> KeepOrDiscard
     -- ^ Cases to omit from an enum when
     --   generating types.
     --
-    --   The default (@[]@) will omit nothing.
+    --   The default (@'const' 'Keep'@) will omit nothing.
   , makeBase :: (Bool, Maybe Ty, [Protocol])
     -- ^ Whether or not to make a base type,
     --   its raw value, and its protocols.
@@ -317,3 +318,8 @@ data Options = Options
     --   The default ('False', 'Nothing', @[]@)
     --   will not create the base type.
   }
+
+data KeepOrDiscard
+  = Keep
+  | Discard
+  deriving stock (Eq, Ord, Show)

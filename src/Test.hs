@@ -25,6 +25,30 @@ import Data.Kind (Type)
 import Data.Void (Void)
 import qualified Data.UUID.Types
 
+data OmitFields0 = OmitFields0
+  { field01 :: Int
+  , field02 :: Bool
+  }
+$(getShwiftyWith defaultOptions{omitFields = const Discard} ''OmitFields0)
+
+data OmitFields1 = OmitFields1
+  { field11 :: Int
+  , field12 :: Bool
+  }
+$(getShwiftyWith defaultOptions{omitFields = \s -> if s `elem` ["field11"] then Discard else Keep} ''OmitFields1)
+
+data OmitCases0
+  = OmitCases01
+  | OmitCases02
+  | OmitCases03
+$(getShwiftyWith defaultOptions{omitCases = const Discard} ''OmitCases0)
+
+data OmitCases1
+  = OmitCases11
+  | OmitCases12
+  | OmitCases13
+$(getShwiftyWith defaultOptions{omitCases = \s -> if s `elem` ["OmitCases11"] then Discard else Keep} ''OmitCases1)
+
 data CodecTest a = CodecTest
   { codecTestOne :: a
   , codecTestTwo :: Int
@@ -217,6 +241,10 @@ test = do
   testPrint @(Fun X X)
   testPrint @(CodecTest X)
   testPrint @(CodecSum X X)
+  testPrint @OmitFields0
+  testPrint @OmitFields1
+  testPrint @OmitCases0
+  testPrint @OmitCases1
   --testPrint @(AliasTestArb X)
 
 testPrint :: forall a. ToSwiftData a => IO ()

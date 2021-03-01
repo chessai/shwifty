@@ -176,13 +176,23 @@ instance ModifyOptions (DontLowercase 'Field) where
 data OmitField (field :: Symbol)
 
 instance KnownSymbol field => ModifyOptions (OmitField field) where
-  modifyOptions options = options { omitFields = symbolVal (Proxy @field) : omitFields options }
+  modifyOptions options = options
+    { omitFields = let v = symbolVal (Proxy @field)
+                   in \s -> if s == v
+                            then Discard
+                            else omitFields options s
+    }
 
 -- | Omit a case
 data OmitCase (cas :: Symbol)
 
 instance KnownSymbol cas => ModifyOptions (OmitCase cas) where
-  modifyOptions options = options { omitCases = symbolVal (Proxy @cas) : omitCases options }
+  modifyOptions options = options
+    { omitCases = let v = symbolVal (Proxy @cas)
+                  in \s -> if s == v
+                           then Discard
+                           else omitCases options s
+    }
 
 -- | Make a base type
 data MakeBase (rawValue :: Maybe Ty) (protocols :: [Protocol])
